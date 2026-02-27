@@ -142,45 +142,41 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=no \
+              ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+              bash << 'ENDSSH'
             set -e
 
-            # GHCR login mit PAT
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # GHCR login
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            # Neues Image pullen
-            docker pull ghcr.io/${{ github.repository }}:latest
-
-            # Stack neu starten (zero-downtime: pull → up -d)
+            # Neues Image pullen und Stack neu starten
             cd ~/log-gateway
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
 
-            # Health-Check (max 30s warten)
-            for i in $(seq 1 10); do
+            # Health-Check (max 45s warten)
+            for i in $(seq 1 15); do
               STATUS=$(curl -sf http://localhost:8081/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "pending")
-              echo "Health check $i/10: $STATUS"
+              echo "Health check $i/15: $STATUS"
               if [ "$STATUS" = "ok" ]; then
-                echo "✅ Deployment erfolgreich!"
+                echo "Deployment successful!"
+                docker image prune -f --filter "until=24h"
                 exit 0
               fi
               sleep 3
             done
-            echo "❌ Health-Check fehlgeschlagen"
+            echo "Health-Check failed"
             docker logs log-gateway --tail 20
             exit 1
-
-      - name: Cleanup old images on server
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            docker image prune -f --filter "until=24h"
+          ENDSSH
