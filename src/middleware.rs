@@ -1,17 +1,19 @@
-use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response, Json};
+use axum::{extract::Request, extract::State, http::StatusCode, middleware::Next, response::Response, Json};
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 
+use crate::handlers::AppState;
+
 /// Axum middleware that validates X-API-Key header.
+/// Reads the expected key from AppState (cached at startup) — no per-request disk I/O.
 /// Passes through if api_key is None (auth disabled).
 pub async fn require_api_key(
+    State(state): State<AppState>,
     request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
-    // Read expected key from Docker secrets or environment variable
-    // If neither is set, auth is disabled
-    let expected_key = match crate::secrets::read_secret("gateway_api_key", "GATEWAY_API_KEY") {
-        Some(key) => key,
+    let expected_key = match &state.api_key {
+        Some(key) => key.clone(),
         None => return Ok(next.run(request).await), // auth disabled
     };
 
@@ -21,7 +23,7 @@ pub async fn require_api_key(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if provided_key != expected_key {
+    if provided_key != expected_key.as_str() {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
@@ -42,15 +44,15 @@ struct Claims {
 }
 
 /// Axum middleware that validates JWT Bearer tokens.
-/// Passes through if GATEWAY_JWT_SECRET is not set (auth disabled).
+/// Reads the JWT secret from AppState (cached at startup) — no per-request disk I/O.
+/// Passes through if jwt_secret is None (auth disabled).
 pub async fn require_jwt(
+    State(state): State<AppState>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
-    // Read JWT secret from Docker secrets or environment variable
-    // If neither is set, JWT auth is disabled
-    let secret = match crate::secrets::read_secret("gateway_jwt_secret", "GATEWAY_JWT_SECRET") {
-        Some(secret) => secret,
+    let secret = match &state.jwt_secret {
+        Some(s) => s.clone(),
         None => return Ok(next.run(request).await), // JWT auth disabled
     };
 
@@ -74,7 +76,7 @@ pub async fn require_jwt(
     let token = &auth_header[7..]; // Skip "Bearer "
 
     // Validate JWT token
-    let decoding_key = DecodingKey::from_secret(secret.as_bytes());
+    let decoding_key = DecodingKey::from_secret(secret.as_bytes()); // Arc<String> deref to str
     let validation = Validation::new(Algorithm::HS256);
 
     match decode::<Claims>(token, &decoding_key, &validation) {
@@ -107,12 +109,31 @@ mod tests {
         Router,
     };
     use jsonwebtoken::{encode, EncodingKey, Header};
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::Mutex;
     use tower::ServiceExt;
 
-    // Mutex to prevent tests from interfering with each other via env vars
-    static ENV_MUTEX: Mutex<()> = Mutex::const_new(());
+    use std::sync::Arc;
+
+    use crate::cache::SemanticCache;
+    use crate::cost_tracker::CostTracker;
+    use crate::metrics::GatewayMetrics;
+    use crate::redactor::Redactor;
+
+    fn make_state(api_key: Option<&str>, jwt_secret: Option<&str>) -> AppState {
+        AppState {
+            redactor: Redactor::new(),
+            cache: SemanticCache::new(10, 60),
+            cost_tracker: CostTracker::new(),
+            metrics: GatewayMetrics::new(),
+            sink: None,
+            s3_exporter: None,
+            sink_output_dir: PathBuf::from("data/logs"),
+            started_at: std::time::Instant::now(),
+            api_key: api_key.map(|k| Arc::new(k.to_string())),
+            jwt_secret: jwt_secret.map(|s| Arc::new(s.to_string())),
+        }
+    }
 
     async fn dummy_handler() -> &'static str {
         "OK"
@@ -120,14 +141,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_disabled_when_no_env_var() {
-        let _guard = ENV_MUTEX.lock().await;
-
-        // Ensure env var is not set
-        std::env::remove_var("GATEWAY_API_KEY");
+        let state = make_state(None, None); // api_key = None → auth disabled
 
         let app = Router::new()
             .route("/", get(dummy_handler))
-            .layer(axum::middleware::from_fn(require_api_key));
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_api_key,
+            ))
+            .with_state(state);
 
         let request = Request::builder().uri("/").body(Body::empty()).unwrap();
 
@@ -137,13 +159,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_rejects_wrong_key() {
-        let _guard = ENV_MUTEX.lock().await;
-
-        std::env::set_var("GATEWAY_API_KEY", "correct-key");
+        let state = make_state(Some("correct-key"), None);
 
         let app = Router::new()
             .route("/", get(dummy_handler))
-            .layer(axum::middleware::from_fn(require_api_key));
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_api_key,
+            ))
+            .with_state(state);
 
         let request = Request::builder()
             .uri("/")
@@ -153,20 +177,19 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
-        // Clean up
-        std::env::remove_var("GATEWAY_API_KEY");
     }
 
     #[tokio::test]
     async fn test_auth_passes_correct_key() {
-        let _guard = ENV_MUTEX.lock().await;
-
-        std::env::set_var("GATEWAY_API_KEY", "correct-key");
+        let state = make_state(Some("correct-key"), None);
 
         let app = Router::new()
             .route("/", get(dummy_handler))
-            .layer(axum::middleware::from_fn(require_api_key));
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_api_key,
+            ))
+            .with_state(state);
 
         let request = Request::builder()
             .uri("/")
@@ -176,40 +199,37 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-
-        // Clean up
-        std::env::remove_var("GATEWAY_API_KEY");
     }
 
     #[tokio::test]
     async fn test_auth_rejects_missing_key_header() {
-        let _guard = ENV_MUTEX.lock().await;
-
-        std::env::set_var("GATEWAY_API_KEY", "correct-key");
+        let state = make_state(Some("correct-key"), None);
 
         let app = Router::new()
             .route("/", get(dummy_handler))
-            .layer(axum::middleware::from_fn(require_api_key));
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_api_key,
+            ))
+            .with_state(state);
 
         let request = Request::builder().uri("/").body(Body::empty()).unwrap();
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
-        // Clean up
-        std::env::remove_var("GATEWAY_API_KEY");
     }
 
     #[tokio::test]
     async fn test_jwt_disabled_when_no_env_var() {
-        let _guard = ENV_MUTEX.lock().await;
-
-        // Ensure env var is not set
-        std::env::remove_var("GATEWAY_JWT_SECRET");
+        let state = make_state(None, None); // jwt_secret = None → JWT disabled
 
         let app = Router::new()
             .route("/", get(dummy_handler))
-            .layer(axum::middleware::from_fn(require_jwt));
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_jwt,
+            ))
+            .with_state(state);
 
         let request = Request::builder().uri("/").body(Body::empty()).unwrap();
 
@@ -219,32 +239,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwt_rejects_missing_token() {
-        let _guard = ENV_MUTEX.lock().await;
-
-        std::env::set_var("GATEWAY_JWT_SECRET", "test-secret");
+        let state = make_state(None, Some("test-secret"));
 
         let app = Router::new()
             .route("/", get(dummy_handler))
-            .layer(axum::middleware::from_fn(require_jwt));
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_jwt,
+            ))
+            .with_state(state);
 
         let request = Request::builder().uri("/").body(Body::empty()).unwrap();
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
-        // Clean up
-        std::env::remove_var("GATEWAY_JWT_SECRET");
     }
 
     #[tokio::test]
     async fn test_jwt_rejects_invalid_token() {
-        let _guard = ENV_MUTEX.lock().await;
-
-        std::env::set_var("GATEWAY_JWT_SECRET", "test-secret");
+        let state = make_state(None, Some("test-secret"));
 
         let app = Router::new()
             .route("/", get(dummy_handler))
-            .layer(axum::middleware::from_fn(require_jwt));
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_jwt,
+            ))
+            .with_state(state);
 
         let request = Request::builder()
             .uri("/")
@@ -254,17 +275,12 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
-        // Clean up
-        std::env::remove_var("GATEWAY_JWT_SECRET");
     }
 
     #[tokio::test]
     async fn test_jwt_accepts_valid_token() {
-        let _guard = ENV_MUTEX.lock().await;
-
         let secret = "test-secret";
-        std::env::set_var("GATEWAY_JWT_SECRET", secret);
+        let state = make_state(None, Some(secret));
 
         // Create a valid JWT token
         let claims = Claims {
@@ -296,7 +312,11 @@ mod tests {
 
         let app = Router::new()
             .route("/", get(check_jwt_subject_header))
-            .layer(axum::middleware::from_fn(require_jwt));
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_jwt,
+            ))
+            .with_state(state);
 
         let request = Request::builder()
             .uri("/")
@@ -306,8 +326,5 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-
-        // Clean up
-        std::env::remove_var("GATEWAY_JWT_SECRET");
     }
 }

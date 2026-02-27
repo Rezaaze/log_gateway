@@ -79,6 +79,12 @@ pub fn create_app(config: GatewayConfig) -> Result<Router> {
         None
     };
 
+    // Read secrets once at startup — cached in AppState to avoid per-request disk I/O
+    let api_key = secrets::read_secret("gateway_api_key", "GATEWAY_API_KEY")
+        .map(|k| Arc::new(k));
+    let jwt_secret = secrets::read_secret("gateway_jwt_secret", "GATEWAY_JWT_SECRET")
+        .map(|s| Arc::new(s));
+
     // Create app state
     let app_state = AppState {
         redactor,
@@ -89,17 +95,25 @@ pub fn create_app(config: GatewayConfig) -> Result<Router> {
         s3_exporter,
         sink_output_dir: PathBuf::from(&config.sink.output_dir),
         started_at: std::time::Instant::now(),
+        api_key,
+        jwt_secret,
     };
 
-    // Build protected routes with auth middleware
+    // Build protected routes with auth middleware (secrets come from AppState, no disk reads)
     let protected = Router::new()
         .route("/api/v1/logs", post(handlers::ingest_log))
         .route("/api/v1/cache/stats", get(handlers::cache_stats))
         .route("/api/v1/costs", get(handlers::cost_summary))
         .route("/api/v1/costs/:tenant_id", get(handlers::tenant_cost))
         .route("/api/v1/export/s3", post(handlers::trigger_s3_export))
-        .route_layer(axum_middleware::from_fn(middleware::require_jwt))
-        .route_layer(axum_middleware::from_fn(middleware::require_api_key));
+        .route_layer(axum_middleware::from_fn_with_state(
+            app_state.clone(),
+            middleware::require_jwt,
+        ))
+        .route_layer(axum_middleware::from_fn_with_state(
+            app_state.clone(),
+            middleware::require_api_key,
+        ));
 
     // Add rate limiting middleware to protected routes if enabled
     let protected = if let Some((limiter_ext, metrics_ext)) = rate_limit_layer {
@@ -157,7 +171,7 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
         None
     };
 
-    // Create app state
+    // Create app state (no secrets needed — test app has no auth middleware)
     let app_state = AppState {
         redactor,
         cache,
@@ -167,6 +181,8 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
         s3_exporter: None,
         sink_output_dir: PathBuf::from(&config.sink.output_dir),
         started_at: std::time::Instant::now(),
+        api_key: None,
+        jwt_secret: None,
     };
 
     // Build protected routes WITHOUT auth middleware for tests

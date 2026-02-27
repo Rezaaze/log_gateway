@@ -46,6 +46,10 @@ pub struct AppState {
     pub s3_exporter: Option<Arc<S3Exporter>>,
     pub sink_output_dir: PathBuf,
     pub started_at: std::time::Instant,
+    /// API key cached at startup — avoids per-request disk reads of /run/secrets/
+    pub api_key: Option<Arc<String>>,
+    /// JWT secret cached at startup — avoids per-request disk reads of /run/secrets/
+    pub jwt_secret: Option<Arc<String>>,
 }
 
 #[utoipa::path(
@@ -433,6 +437,8 @@ mod tests {
             s3_exporter: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
+            api_key: None,
+            jwt_secret: None,
         };
 
         // Build application
@@ -469,6 +475,8 @@ mod tests {
             s3_exporter: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
+            api_key: None,
+            jwt_secret: None,
         };
 
         // Build application
@@ -514,6 +522,8 @@ mod tests {
             s3_exporter: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
+            api_key: None,
+            jwt_secret: None,
         };
 
         // Build application
@@ -547,6 +557,8 @@ mod tests {
             s3_exporter: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
+            api_key: None,
+            jwt_secret: None,
         };
 
         let cost_tracker = app_state.cost_tracker.clone();
@@ -591,6 +603,8 @@ mod tests {
             s3_exporter: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
+            api_key: None,
+            jwt_secret: None,
         };
 
         let cost_tracker = app_state.cost_tracker.clone();
@@ -630,6 +644,8 @@ mod tests {
             s3_exporter: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
+            api_key: None,
+            jwt_secret: None,
         };
 
         let app = axum::Router::new()
