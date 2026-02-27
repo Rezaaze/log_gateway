@@ -81,8 +81,7 @@ pub fn create_app(config: GatewayConfig) -> Result<Router> {
 
     // Read secrets once at startup — cached in AppState to avoid per-request disk I/O
     let api_key = secrets::read_secret("gateway_api_key", "GATEWAY_API_KEY").map(Arc::new);
-    let jwt_secret =
-        secrets::read_secret("gateway_jwt_secret", "GATEWAY_JWT_SECRET").map(Arc::new);
+    let jwt_secret = secrets::read_secret("gateway_jwt_secret", "GATEWAY_JWT_SECRET").map(Arc::new);
 
     // Create app state
     let app_state = AppState {
