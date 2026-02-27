@@ -8,13 +8,17 @@ set -euo pipefail
 IMAGE="${IMAGE:-ghcr.io/rezaaze/log_gateway:latest}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/log-gateway}"
 PORT="${PORT:-8080}"
+GHCR_TOKEN="${GHCR_TOKEN:-}"
+GHCR_USER="${GHCR_USER:-Rezaaze}"
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --port)  PORT="$2";        shift 2 ;;
-    --dir)   INSTALL_DIR="$2"; shift 2 ;;
-    --image) IMAGE="$2";       shift 2 ;;
+    --port)       PORT="$2";        shift 2 ;;
+    --dir)        INSTALL_DIR="$2"; shift 2 ;;
+    --image)      IMAGE="$2";       shift 2 ;;
+    --token)      GHCR_TOKEN="$2";  shift 2 ;;
+    --ghcr-user)  GHCR_USER="$2";   shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -127,8 +131,16 @@ EOF
 
 # ── 7. Pull image ─────────────────────────────────────────────────────────────
 info "Pulling image $IMAGE..."
+if [[ -n "$GHCR_TOKEN" ]]; then
+  info "Logging into GHCR..."
+  echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+fi
 if ! docker pull "$IMAGE"; then
-  error "Failed to pull image. Check that GHCR is accessible or pass --image with a public image."
+  error "Failed to pull image '$IMAGE'.
+  If the image is private, provide a token:
+    bash deploy.sh --token <github-pat>
+  Or make the GHCR package public at:
+    https://github.com/users/Rezaaze/packages/container/log_gateway/settings"
 fi
 
 # ── 8. Start / restart ────────────────────────────────────────────────────────
