@@ -18,6 +18,15 @@ use tracing::info;
 // Default: number of logical CPUs (auto-detected by Tokio).
 #[tokio::main]
 async fn main() -> Result<()> {
+    // tokio-console: intercepts tracing events for async task inspection.
+    // Activate with: RUSTFLAGS="--cfg tokio_unstable" cargo run --features tokio-console
+    // Then connect with: tokio-console (listens on 127.0.0.1:6669 by default)
+    #[cfg(feature = "tokio-console")]
+    {
+        console_subscriber::init();
+        tracing::info!("tokio-console subscriber active on 127.0.0.1:6669");
+    }
+    #[cfg(not(feature = "tokio-console"))]
     // Initialize tracing subscriber based on LOG_FORMAT environment variable
     logging::init_tracing();
 

@@ -3,6 +3,11 @@ name = "log-gateway"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Enable tokio-console subscriber for async task profiling
+# Build with: RUSTFLAGS="--cfg tokio_unstable" cargo run --features tokio-console
+tokio-console = ["dep:console-subscriber"]
+
 [dependencies]
 axum = { version = "0.7", features = ["json"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
@@ -37,6 +42,7 @@ jsonwebtoken = "9"
 utoipa = { version = "4", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
 crossbeam = { version = "0.8", features = ["crossbeam-queue"] }
+console-subscriber = { version = "0.4", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
@@ -61,3 +67,11 @@ strip = true
 [profile.dev]
 opt-level = 0
 debug = true
+
+# Profiling: optimized wie release, aber mit Debug-Symbolen für flamegraph
+# cargo build --profile profiling
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+lto = false
