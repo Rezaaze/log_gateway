@@ -82,9 +82,9 @@ pub async fn ingest_log(
         headers
     }
 
-    // 1. Deserialize directly from bytes to LogEntry
-    let entry: LogEntry = match serde_json::from_slice(&body) {
-        Ok(e) => e,
+    // 1. Deserialize bytes → Value (single JSON parse, reused for schema validation)
+    let raw: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
         Err(e) => {
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
             state.metrics.record_duration(duration_ms);
@@ -97,23 +97,8 @@ pub async fn ingest_log(
         }
     };
 
-    // 2. Convert to Value for schema validation
-    let raw_json = match serde_json::to_value(&entry) {
-        Ok(v) => v,
-        Err(e) => {
-            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-            state.metrics.record_duration(duration_ms);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                create_headers(&id),
-                Json(serde_json::json!({ "error": format!("internal error: {}", e) })),
-            )
-                .into_response();
-        }
-    };
-
-    // 3. Schema validation
-    if let Err(e) = crate::schema_validator::SchemaValidator::validate(&raw_json) {
+    // 2. Schema validation against the already-parsed Value (no re-serialization)
+    if let Err(e) = crate::schema_validator::SchemaValidator::validate(&raw) {
         let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
         state.metrics.record_duration(duration_ms);
         return (
@@ -123,6 +108,21 @@ pub async fn ingest_log(
         )
             .into_response();
     }
+
+    // 3. Value → LogEntry (reuses the already-parsed Value, no second parse from bytes)
+    let entry: LogEntry = match serde_json::from_value(raw) {
+        Ok(e) => e,
+        Err(e) => {
+            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            state.metrics.record_duration(duration_ms);
+            return (
+                StatusCode::BAD_REQUEST,
+                create_headers(&id),
+                Json(serde_json::json!({ "error": format!("invalid log entry: {}", e) })),
+            )
+                .into_response();
+        }
+    };
 
     // 4. Extract and validate tenant ID from X-Tenant-ID header
     let tenant_id = headers

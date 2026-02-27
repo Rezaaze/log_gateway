@@ -98,7 +98,7 @@ async fn test_ingest_log_invalid_schema() -> Result<()> {
         .send()
         .await?;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     handle.abort();
     Ok(())
