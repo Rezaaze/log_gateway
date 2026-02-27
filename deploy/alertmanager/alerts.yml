@@ -1,0 +1,59 @@
+groups:
+  - name: gateway_alerts
+    rules:
+      # GatewayHighErrorRate — rate_limit_hits_total rate > 10/s für > 1min → severity: warning
+      - alert: GatewayHighErrorRate
+        expr: rate(gateway_rate_limit_hits_total[1m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limit hits detected"
+          description: "Gateway rate limit hits rate is {{ $value }} per second (threshold: 10/s)"
+
+      # GatewayHighLatencyP99 — histogram_quantile(0.99) > 500ms für > 2min → severity: warning
+      - alert: GatewayHighLatencyP99
+        expr: histogram_quantile(0.99, rate(gateway_request_duration_ms_bucket[2m])) > 500
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency detected (p99 > 500ms)"
+          description: "Gateway request latency p99 is {{ $value }}ms (threshold: 500ms)"
+
+      # GatewayCacheHitRateLow — cache hit rate < 20% für > 5min → severity: info
+      - alert: GatewayCacheHitRateLow
+        expr: |
+          (
+            rate(gateway_cache_hits_total[5m])
+            /
+            (rate(gateway_cache_hits_total[5m]) + rate(gateway_cache_misses_total[5m]))
+          ) * 100 < 20
+          and
+          (rate(gateway_cache_hits_total[5m]) + rate(gateway_cache_misses_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low cache hit rate detected"
+          description: "Gateway cache hit rate is {{ $value }}% (threshold: 20%)"
+
+      # GatewayHighPiiDetection — pii_hits rate > 50/s für > 1min → severity: warning
+      - alert: GatewayHighPiiDetection
+        expr: rate(gateway_pii_hits_total[1m]) > 50
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High PII detection rate"
+          description: "Gateway PII hits rate is {{ $value }} per second (threshold: 50/s)"
+
+      # GatewayDown — up{job="gateway"} == 0 für > 30s → severity: critical
+      - alert: GatewayDown
+        expr: up{job="log-gateway"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway is down"
+          description: "Gateway service has been down for more than 30 seconds"

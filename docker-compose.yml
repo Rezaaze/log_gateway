@@ -1,0 +1,118 @@
+version: "3.9"
+
+secrets:
+  gateway_api_key:
+    file: ./secrets/gateway_api_key.txt
+  gateway_jwt_secret:
+    file: ./secrets/gateway_jwt_secret.txt
+
+services:
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: log-gateway:latest
+    container_name: log-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      RUST_LOG: "info"
+      GATEWAY__SERVER__HOST: "0.0.0.0"
+      GATEWAY__SERVER__PORT: "8080"
+      GATEWAY__SINK__OUTPUT_DIR: "/app/data/logs"
+      GATEWAY__S3__ENABLED: "false"      # auf "true" für MinIO-Tests
+      GATEWAY__S3__ENDPOINT_URL: "http://minio:9000"
+      GATEWAY__S3__BUCKET: "log-gateway"
+      GATEWAY__S3__REGION: "us-east-1"
+      GATEWAY__S3__PREFIX: "logs/"
+      GATEWAY__S3__ACCESS_KEY_ID: "minioadmin"
+      GATEWAY__S3__SECRET_ACCESS_KEY: "minioadmin"
+      GATEWAY__S3__DELETE_AFTER_UPLOAD: "false"
+      # Uncomment to enable API key auth via environment variable (fallback):
+      # GATEWAY_API_KEY: "changeme"
+      # GATEWAY_JWT_SECRET: "changeme-jwt-secret-min-32-chars!!"
+    volumes:
+      - ./data/logs:/app/data/logs
+    secrets:
+      - gateway_api_key
+      - gateway_jwt_secret
+    # Healthcheck disabled - distroless has no shell/curl for HTTP checks
+    # Prometheus monitors health via /metrics endpoint
+    # healthcheck:
+    #   test: ["CMD", "/app/log-gateway", "--health"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 3
+    #   start_period: 5s
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+      minio:
+        condition: service_started
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"    # MinIO Console
+    environment:
+      MINIO_ROOT_USER: "minioadmin"
+      MINIO_ROOT_PASSWORD: "minioadmin"
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/etc/grafana/provisioning/dashboards/gateway.json"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    environment:
+      - SLACK_WEBHOOK_CRITICAL=${SLACK_WEBHOOK_CRITICAL:-https://hooks.slack.com/services/PLACEHOLDER/CRITICAL}
+      - SLACK_WEBHOOK_WARNING=${SLACK_WEBHOOK_WARNING:-https://hooks.slack.com/services/PLACEHOLDER/WARNING}
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--web.external-url=http://localhost:9093"
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  minio-data:

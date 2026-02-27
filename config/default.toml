@@ -1,0 +1,39 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[cache]
+max_capacity = 10000
+ttl_seconds = 300
+
+[cost]
+enabled = true
+
+[metrics]
+enabled = true
+
+[sink]
+enabled = true
+output_dir = "data/logs"
+max_buffer_size = 100
+flush_interval_secs = 30
+compress = false
+
+[rate_limit]
+enabled = true
+requests_per_second = 1000
+
+[s3]
+enabled = false
+# endpoint_url = "http://minio:9000"   # Auskommentiert für AWS
+bucket = ""
+region = "us-east-1"
+prefix = "logs/"
+access_key_id = ""
+secret_access_key = ""
+delete_after_upload = false
+
+[tls]
+enabled = false
+cert_path = "certs/cert.pem"
+key_path  = "certs/key.pem"

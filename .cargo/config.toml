@@ -1,0 +1,5 @@
+# Build configuration for production Linux x86_64 servers.
+# Enables AVX2/SSE4.2 instructions — build and run on the same machine class.
+# Set via environment variable on the CI/CD build host instead if cross-compiling.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=native"]

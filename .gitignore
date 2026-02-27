@@ -1,0 +1,26 @@
+# Build artifacts
+target/
+
+# Test data (runtime generated)
+data/
+
+# Logs
+*.log
+gateway.log
+
+# Environment / secrets
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Docker volumes (local only)
+deploy/grafana/data/
+deploy/prometheus/data/

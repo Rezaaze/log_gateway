@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: "log-gateway"
+
+# Alerting rules configuration
+rule_files:
+  - "alertmanager/alerts.yml"
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: "log-gateway"
+    static_configs:
+      - targets: ["gateway:8080"]
+    metrics_path: "/metrics"
+    scrape_interval: 5s
