@@ -36,9 +36,3 @@ scrape_configs:
           cpuset: "3"
     metrics_path: "/metrics"
 
-  # ── Nginx Load Balancer ───────────────────────────────────────────────────
-  - job_name: "nginx"
-    scrape_interval: 15s
-    static_configs:
-      - targets: ["nginx-lb:8090"]
-    metrics_path: "/nginx-health"        # Einfacher Liveness-Check
