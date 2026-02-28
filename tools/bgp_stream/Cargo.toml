@@ -37,8 +37,8 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Lock-free MPMC channel
-crossbeam-channel = "0.5"
+# Async MPMC channel (avoids blocking Tokio threads in sender tasks)
+async-channel = "2"
 
 # JWT (shared with gateway)
 jsonwebtoken = "9"
