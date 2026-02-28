@@ -21,6 +21,14 @@ Env vars (all optional)
   CHANNEL_CAP          bounded channel size  (default: 64_000)
 */
 
+use async_channel::{bounded, Receiver, Sender, TrySendError};
+use chrono::Utc;
+use futures_util::{SinkExt, StreamExt};
+use log_gateway::models::{LogEntry, LogLevel};
+use reqwest::{header, Client};
+use rustls::RootCertStore;
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     env,
@@ -30,15 +38,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-use chrono::Utc;
-use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
-use futures_util::{SinkExt, StreamExt};
-use log_gateway::models::{LogEntry, LogLevel};
-use reqwest::{header, Client};
-use rustls::RootCertStore;
-use serde::Deserialize;
-use serde_json::{json, Value};
 use tokio::time::sleep;
 use tokio_tungstenite::{
     connect_async_tls_with_config,
@@ -294,7 +293,7 @@ fn process_ris_data(
                     Err(TrySendError::Full(_)) => {
                         stats.dropped.fetch_add(1, Ordering::Relaxed);
                     }
-                    Err(TrySendError::Disconnected(_)) => return,
+                    Err(TrySendError::Closed(_)) => return,
                 }
             }
         }
@@ -331,7 +330,7 @@ fn process_ris_data(
                 Err(TrySendError::Full(_)) => {
                     stats.dropped.fetch_add(1, Ordering::Relaxed);
                 }
-                Err(TrySendError::Disconnected(_)) => return,
+                Err(TrySendError::Closed(_)) => return,
             }
         }
     }
@@ -348,74 +347,70 @@ async fn sender_task(
     jwt: String,
 ) {
     let batch_url = format!("{}/api/v1/logs/batch", cfg.gateway_url);
-
     let mut batch: Vec<LogEntry> = Vec::with_capacity(cfg.batch_size);
-    let mut deadline = Instant::now() + cfg.batch_timeout;
 
     loop {
-        // How long until the deadline?
-        let now = Instant::now();
-        let remaining = if now >= deadline {
-            Duration::from_millis(1)
-        } else {
-            deadline - now
-        };
+        // Collect entries until batch_size reached or batch_timeout expires.
+        // Uses tokio::select! so the Tokio thread is never blocked.
+        let timer = tokio::time::sleep(cfg.batch_timeout);
+        tokio::pin!(timer);
 
-        // Non-blocking drain up to batch_size or timeout
-        match rx.recv_timeout(remaining.min(cfg.batch_timeout)) {
-            Ok(entry) => {
-                batch.push(entry);
+        loop {
+            tokio::select! {
+                _ = &mut timer => break,
+                result = rx.recv() => {
+                    match result {
+                        Ok(entry) => {
+                            batch.push(entry);
+                            if batch.len() >= cfg.batch_size {
+                                break;
+                            }
+                        }
+                        Err(_) => return, // channel closed — shut down
+                    }
+                }
             }
-            Err(_) => {} // timeout or disconnected — fall through to flush check
         }
 
-        let now = Instant::now();
         if batch.is_empty() {
-            if now >= deadline {
-                deadline = now + cfg.batch_timeout;
-            }
             continue;
         }
 
-        // Flush when full or deadline reached
-        if batch.len() >= cfg.batch_size || now >= deadline {
-            let n = batch.len();
-            let mut req = client
-                .post(&batch_url)
-                .header("Content-Type", "application/json")
-                .header("X-Tenant-ID", &cfg.tenant_id)
-                .header("User-Agent", "bgp-stream-rs/1.0")
-                .json(&batch);
+        let n = batch.len();
+        let mut req = client
+            .post(&batch_url)
+            .header("Content-Type", "application/json")
+            .header("X-Tenant-ID", &cfg.tenant_id)
+            .header("User-Agent", "bgp-stream-rs/1.0")
+            .json(&batch);
 
-            if !cfg.api_key.is_empty() {
-                req = req.header("X-API-Key", &cfg.api_key);
-            }
-            if !jwt.is_empty() {
-                req = req.header(header::AUTHORIZATION, format!("Bearer {jwt}"));
-            }
+        if !cfg.api_key.is_empty() {
+            req = req.header("X-API-Key", &cfg.api_key);
+        }
+        if !jwt.is_empty() {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {jwt}"));
+        }
 
-            match req.send().await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        stats.sent.fetch_add(n as u64, Ordering::Relaxed);
-                    } else {
-                        warn!(
-                            worker = id,
-                            status = resp.status().as_u16(),
-                            "batch rejected"
-                        );
-                        stats.errors.fetch_add(n as u64, Ordering::Relaxed);
-                    }
-                }
-                Err(e) => {
-                    error!(worker = id, error = %e, "send failed");
+        match req.send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    stats.sent.fetch_add(n as u64, Ordering::Relaxed);
+                } else {
+                    warn!(
+                        worker = id,
+                        status = resp.status().as_u16(),
+                        "batch rejected"
+                    );
                     stats.errors.fetch_add(n as u64, Ordering::Relaxed);
                 }
             }
-
-            batch.clear();
-            deadline = Instant::now() + cfg.batch_timeout;
+            Err(e) => {
+                error!(worker = id, error = %e, "send failed");
+                stats.errors.fetch_add(n as u64, Ordering::Relaxed);
+            }
         }
+
+        batch.clear();
     }
 }
 
@@ -480,10 +475,7 @@ async fn bgp_stream_task(
         let (mut write, mut read) = ws_stream.split();
 
         // Subscribe to UPDATE events
-        if let Err(e) = write
-            .send(Message::Text(subscribe_msg.clone().into()))
-            .await
-        {
+        if let Err(e) = write.send(Message::Text(subscribe_msg.clone())).await {
             warn!("Subscribe failed: {e} — retry in 3s");
             sleep(Duration::from_secs(3)).await;
             continue;
