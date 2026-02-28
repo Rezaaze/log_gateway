@@ -317,3 +317,28 @@ async fn test_cost_summary_endpoint() -> Result<()> {
     handle.abort();
     Ok(())
 }
+
+#[tokio::test]
+async fn test_ingest_rejects_oversized_body() -> Result<()> {
+    let (base_url, handle) = spawn_test_server().await?;
+    let client = Client::new();
+
+    // Build a body that exceeds the 64KB limit
+    let oversized_message = "x".repeat(70_000);
+    let body = format!(
+        r#"{{"source":"test","level":"info","message":"{}"}}"#,
+        oversized_message
+    );
+
+    let response = client
+        .post(format!("{}/api/v1/logs", base_url))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    handle.abort();
+    Ok(())
+}

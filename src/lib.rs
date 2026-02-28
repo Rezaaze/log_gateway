@@ -1,5 +1,6 @@
 use anyhow::Result;
 use axum::{
+    extract::DefaultBodyLimit,
     middleware as axum_middleware,
     routing::{get, post},
     Router,
@@ -99,7 +100,10 @@ pub fn create_app(config: GatewayConfig) -> Result<Router> {
 
     // Build protected routes with auth middleware (secrets come from AppState, no disk reads)
     let protected = Router::new()
-        .route("/api/v1/logs", post(handlers::ingest_log))
+        .route(
+            "/api/v1/logs",
+            post(handlers::ingest_log).layer(DefaultBodyLimit::max(65_536)),
+        )
         .route("/api/v1/cache/stats", get(handlers::cache_stats))
         .route("/api/v1/costs", get(handlers::cost_summary))
         .route("/api/v1/costs/:tenant_id", get(handlers::tenant_cost))
@@ -185,7 +189,10 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
 
     // Build protected routes WITHOUT auth middleware for tests
     let protected = Router::new()
-        .route("/api/v1/logs", post(handlers::ingest_log))
+        .route(
+            "/api/v1/logs",
+            post(handlers::ingest_log).layer(DefaultBodyLimit::max(65_536)),
+        )
         .route("/api/v1/cache/stats", get(handlers::cache_stats))
         .route("/api/v1/costs", get(handlers::cost_summary))
         .route("/api/v1/costs/:tenant_id", get(handlers::tenant_cost))
