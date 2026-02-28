@@ -36,3 +36,11 @@ scrape_configs:
           cpuset: "3"
     metrics_path: "/metrics"
 
+  # ── HAProxy Load Balancer ─────────────────────────────────────────────────
+  - job_name: "haproxy"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["haproxy-lb:8404"]
+    metrics_path: "/stats"
+    params:
+      stats: [prometheus]

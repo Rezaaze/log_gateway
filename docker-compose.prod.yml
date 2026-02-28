@@ -1,18 +1,17 @@
-# ── Log Gateway — Production Cluster (4-Zylinder Setup, Proxy-frei) ──────────
+# ── Log Gateway — Production Cluster (4-Zylinder Setup) ──────────────────────
 #
-# Architektur (ohne Nginx — direkter Zugriff):
+# Architektur:
 #   Internet
-#     ├─ gateway_1 :8081  (vCPU 0)
-#     ├─ gateway_2 :8082  (vCPU 1)
-#     ├─ gateway_3 :8083  (vCPU 2)
-#     └─ gateway_4 :8084  (vCPU 3)
+#     └─ HAProxy :8090  (Load Balancer, leastconn)
+#          ├─ gateway_1 :8080  (vCPU 0)
+#          ├─ gateway_2 :8080  (vCPU 1)
+#          ├─ gateway_3 :8080  (vCPU 2)
+#          └─ gateway_4 :8080  (vCPU 3)
 #
-# Kein Reverse-Proxy-Overhead: Client → Gateway (1x HTTP-Parse statt 2x).
-# Gzip-Komprimierung läuft direkt in Axum (CompressionLayer).
-# Rate Limiting läuft direkt in Axum (GCRA per Tenant).
+# HAProxy Stats Dashboard: http://server:8404/stats
 #
-# Load Balancing: Über vorgelagerten DNS/Cloud-LB oder HAProxy möglich.
-# Für Single-Node: alle 4 Ports sind gleichwertig erreichbar.
+# Netzwerk: Nur HAProxy ist nach außen erreichbar (Port 8090).
+#           Gateways sind ausschließlich über das interne "gateway-net" erreichbar.
 #
 # Starten:   docker compose -f docker-compose.prod.yml up -d
 # Neu bauen: docker compose -f docker-compose.prod.yml build
@@ -52,13 +51,11 @@ x-gateway-volumes: &gateway-volumes
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
 
-  # ── Gateway Instanz 1 — vCPU 0 — Port 8081 ──────────────────────────────────
+  # ── Gateway Instanz 1 — vCPU 0 ─────────────────────────────────────────────
   gateway_1:
     image: log-gateway:latest
     container_name: gateway_1
     cpuset: "0"
-    ports:
-      - "8081:8080"                  # Direkt erreichbar — kein Proxy-Overhead
     environment:
       <<: *gateway-env
       INSTANCE_ID: "1"
@@ -76,13 +73,11 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # ── Gateway Instanz 2 — vCPU 1 — Port 8082 ──────────────────────────────────
+  # ── Gateway Instanz 2 — vCPU 1 ─────────────────────────────────────────────
   gateway_2:
     image: log-gateway:latest
     container_name: gateway_2
     cpuset: "1"
-    ports:
-      - "8082:8080"
     environment:
       <<: *gateway-env
       INSTANCE_ID: "2"
@@ -100,13 +95,11 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # ── Gateway Instanz 3 — vCPU 2 — Port 8083 ──────────────────────────────────
+  # ── Gateway Instanz 3 — vCPU 2 ─────────────────────────────────────────────
   gateway_3:
     image: log-gateway:latest
     container_name: gateway_3
     cpuset: "2"
-    ports:
-      - "8083:8080"
     environment:
       <<: *gateway-env
       INSTANCE_ID: "3"
@@ -124,13 +117,11 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # ── Gateway Instanz 4 — vCPU 3 — Port 8084 ──────────────────────────────────
+  # ── Gateway Instanz 4 — vCPU 3 ─────────────────────────────────────────────
   gateway_4:
     image: log-gateway:latest
     container_name: gateway_4
     cpuset: "3"
-    ports:
-      - "8084:8080"
     environment:
       <<: *gateway-env
       INSTANCE_ID: "4"
@@ -146,6 +137,33 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
+
+  # ── HAProxy Load Balancer ────────────────────────────────────────────────────
+  haproxy:
+    image: haproxy:3.0-alpine
+    container_name: haproxy-lb
+    ports:
+      - "8090:8090"                  # Einziger nach außen offener Port
+      - "8404:8404"                  # HAProxy Stats Dashboard
+    volumes:
+      - ./deploy/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - gateway-net
+    depends_on:
+      gateway_1:
+        condition: service_healthy
+      gateway_2:
+        condition: service_healthy
+      gateway_3:
+        condition: service_healthy
+      gateway_4:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8404/stats"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     restart: unless-stopped
 
   # ── MinIO ───────────────────────────────────────────────────────────────────
