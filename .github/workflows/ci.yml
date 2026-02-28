@@ -157,21 +157,60 @@ jobs:
 
       - name: Copy config files to server
         run: |
+          # Verzeichnisse erstellen
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@167.235.30.106 \
+            "mkdir -p /root/log-gateway/deploy/haproxy \
+                      /root/log-gateway/deploy/alertmanager \
+                      /root/log-gateway/deploy/grafana/provisioning/dashboards \
+                      /root/log-gateway/deploy/grafana/provisioning/datasources \
+                      /root/log-gateway/tools \
+                      /root/log-gateway/data/logs \
+                      /root/log-gateway/certs \
+                      /root/log-gateway/config"
+
+          # docker-compose
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             docker-compose.prod.yml \
             root@167.235.30.106:/root/log-gateway/docker-compose.prod.yml
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@167.235.30.106 \
-            "mkdir -p /root/log-gateway/deploy/haproxy /root/log-gateway/tools"
-
+          # HAProxy
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             deploy/haproxy/haproxy.cfg \
             root@167.235.30.106:/root/log-gateway/deploy/haproxy/haproxy.cfg
 
+          # Prometheus
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             deploy/prometheus.prod.yml \
             root@167.235.30.106:/root/log-gateway/deploy/prometheus.prod.yml
 
+          # Alertmanager
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/alertmanager/alertmanager.yml \
+            root@167.235.30.106:/root/log-gateway/deploy/alertmanager/alertmanager.yml
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/alertmanager/alerts.yml \
+            root@167.235.30.106:/root/log-gateway/deploy/alertmanager/alerts.yml
+
+          # Grafana provisioning
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/grafana/provisioning/dashboards/dashboard.yml \
+            root@167.235.30.106:/root/log-gateway/deploy/grafana/provisioning/dashboards/dashboard.yml
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/grafana/provisioning/dashboards/gateway.json \
+            root@167.235.30.106:/root/log-gateway/deploy/grafana/provisioning/dashboards/gateway.json
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/grafana/provisioning/datasources/prometheus.yml \
+            root@167.235.30.106:/root/log-gateway/deploy/grafana/provisioning/datasources/prometheus.yml
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/grafana/provisioning/datasources/alertmanager.yml \
+            root@167.235.30.106:/root/log-gateway/deploy/grafana/provisioning/datasources/alertmanager.yml
+
+          # Gateway Config
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            config/default.toml \
+            root@167.235.30.106:/root/log-gateway/config/default.toml
+
+          # Tools
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             tools/wikipedia_stream.py \
             root@167.235.30.106:/root/log-gateway/tools/wikipedia_stream.py
