@@ -140,6 +140,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [docker]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       - name: Checkout repository
@@ -181,8 +184,8 @@ jobs:
               bash << 'ENDSSH'
             set -e
 
-            # GHCR login und neues Image pullen
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            # GHCR login und neues Image pullen (GITHUB_TOKEN hat packages:read)
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
             docker pull ghcr.io/rezaaze/log_gateway:latest
 
             # Altes Image taggen (Rollback-Möglichkeit)
