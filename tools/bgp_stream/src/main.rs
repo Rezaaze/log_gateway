@@ -64,8 +64,7 @@ struct Config {
 impl Config {
     fn from_env() -> Self {
         Self {
-            gateway_url: env::var("GATEWAY_URL")
-                .unwrap_or_else(|_| "http://localhost:8090".into()),
+            gateway_url: env::var("GATEWAY_URL").unwrap_or_else(|_| "http://localhost:8090".into()),
             api_key: env::var("GATEWAY_API_KEY").unwrap_or_default(),
             jwt_secret: env::var("GATEWAY_JWT_SECRET").unwrap_or_default(),
             workers: env::var("WORKERS")
@@ -171,8 +170,8 @@ struct RisMessage {
 #[derive(Deserialize, Debug)]
 struct RisData {
     timestamp: Option<f64>,
-    peer_asn: Option<Value>,   // can be string or number
-    path: Option<Vec<Value>>,  // can be nested (AS-sets)
+    peer_asn: Option<Value>,  // can be string or number
+    path: Option<Vec<Value>>, // can be nested (AS-sets)
     announcements: Option<Vec<Announcement>>,
     withdrawals: Option<Vec<String>>,
 }
@@ -225,11 +224,7 @@ fn process_ris_data(
 
     let peer_asn_raw = data.peer_asn.as_ref().map(asn_to_u64).unwrap_or(0);
 
-    let path_vec: Vec<u64> = data
-        .path
-        .as_deref()
-        .map(flatten_path)
-        .unwrap_or_default();
+    let path_vec: Vec<u64> = data.path.as_deref().map(flatten_path).unwrap_or_default();
 
     let origin = path_vec.last().copied().unwrap_or(peer_asn_raw);
 
@@ -265,11 +260,7 @@ fn process_ris_data(
     // ── Announcements ──────────────────────────────────────────────────────────
     if let Some(announcements) = &data.announcements {
         for ann in announcements {
-            let nh = ann
-                .next_hop
-                .as_deref()
-                .unwrap_or("")
-                .to_string();
+            let nh = ann.next_hop.as_deref().unwrap_or("").to_string();
             let prefixes = ann.prefixes.as_deref().unwrap_or(&[]);
             for pfx in prefixes {
                 // Sampling
@@ -282,9 +273,7 @@ fn process_ris_data(
                     timestamp: Utc::now(),
                     level: LogLevel::Info,
                     source: "ripe-ris".into(),
-                    message: format!(
-                        "ANNOUNCE {pfx} via {peer_name} (path: {path_display})"
-                    ),
+                    message: format!("ANNOUNCE {pfx} via {peer_name} (path: {path_display})"),
                     metadata: Some(json!({
                         "event":      "ANNOUNCE",
                         "prefix":     pfx,
@@ -469,7 +458,10 @@ async fn bgp_stream_task(
         let (mut write, mut read) = ws_stream.split();
 
         // Subscribe to UPDATE events
-        if let Err(e) = write.send(Message::Text(subscribe_msg.clone().into())).await {
+        if let Err(e) = write
+            .send(Message::Text(subscribe_msg.clone().into()))
+            .await
+        {
             warn!("Subscribe failed: {e} — retry in 3s");
             sleep(Duration::from_secs(3)).await;
             continue;
@@ -482,16 +474,10 @@ async fn bgp_stream_task(
                     match serde_json::from_str::<RisMessage>(&text) {
                         Ok(ris_msg) if ris_msg.msg_type == "ris_message" => {
                             if let Some(data) = &ris_msg.data {
-                                process_ris_data(
-                                    data,
-                                    &known,
-                                    &tx,
-                                    &stats,
-                                    cfg.sample_rate,
-                                );
+                                process_ris_data(data, &known, &tx, &stats, cfg.sample_rate);
                             }
                         }
-                        Ok(_) => {} // ris_subscribe_ok or other control messages
+                        Ok(_) => {}  // ris_subscribe_ok or other control messages
                         Err(_) => {} // malformed JSON — ignore
                     }
                 }
@@ -531,7 +517,11 @@ async fn stats_task(stats: Arc<Stats>, cfg: Arc<Config>, start: Instant, chan_ca
         prev_sent = sent;
 
         let rps_window = delta as f64 / 10.0;
-        let rps_avg = if elapsed > 0.0 { sent as f64 / elapsed } else { 0.0 };
+        let rps_avg = if elapsed > 0.0 {
+            sent as f64 / elapsed
+        } else {
+            0.0
+        };
         let ingress = if elapsed > 0.0 {
             (ann + with) as f64 / elapsed
         } else {
@@ -579,8 +569,14 @@ async fn main() {
     println!("  Batch tmo:   {}ms", cfg.batch_timeout.as_millis());
     println!("  Sample rate: {:.0}%", cfg.sample_rate * 100.0);
     println!("  Channel cap: {}", cfg.channel_cap);
-    println!("  API-Key:     {}", if cfg.api_key.is_empty() { "no" } else { "yes" });
-    println!("  JWT:         {}", if jwt.is_empty() { "no" } else { "yes" });
+    println!(
+        "  API-Key:     {}",
+        if cfg.api_key.is_empty() { "no" } else { "yes" }
+    );
+    println!(
+        "  JWT:         {}",
+        if jwt.is_empty() { "no" } else { "yes" }
+    );
     println!("{}", "=".repeat(65));
 
     // Build shared reqwest client (connection pool = keep-alive per host)
