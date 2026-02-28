@@ -142,6 +142,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
@@ -149,7 +152,28 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "167.235.30.106" >> ~/.ssh/known_hosts
 
-      - name: Deploy via SSH
+      - name: Copy config files to server
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            docker-compose.prod.yml \
+            root@167.235.30.106:/root/log-gateway/docker-compose.prod.yml
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@167.235.30.106 \
+            "mkdir -p /root/log-gateway/deploy/haproxy /root/log-gateway/tools"
+
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/haproxy/haproxy.cfg \
+            root@167.235.30.106:/root/log-gateway/deploy/haproxy/haproxy.cfg
+
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/prometheus.prod.yml \
+            root@167.235.30.106:/root/log-gateway/deploy/prometheus.prod.yml
+
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            tools/wikipedia_stream.py \
+            root@167.235.30.106:/root/log-gateway/tools/wikipedia_stream.py
+
+      - name: Deploy cluster via SSH
         run: |
           ssh -i ~/.ssh/deploy_key \
               -o StrictHostKeyChecking=no \
@@ -157,26 +181,40 @@ jobs:
               bash << 'ENDSSH'
             set -e
 
-            # GHCR login
+            # GHCR login und neues Image pullen
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            docker pull ghcr.io/rezaaze/log_gateway:latest
 
-            # Neues Image pullen und Stack neu starten
-            cd ~/log-gateway
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d
+            # Altes Image taggen (Rollback-Möglichkeit)
+            docker tag ghcr.io/rezaaze/log_gateway:latest log-gateway:previous 2>/dev/null || true
+            docker tag ghcr.io/rezaaze/log_gateway:latest log-gateway:latest
 
-            # Health-Check (max 45s warten)
-            for i in $(seq 1 15); do
-              STATUS=$(curl -sf http://localhost:8081/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "pending")
-              echo "Health check $i/15: $STATUS"
-              if [ "$STATUS" = "ok" ]; then
-                echo "Deployment successful!"
-                docker image prune -f --filter "until=24h"
+            # Cluster neu starten (nur geänderte Container werden neu gestartet)
+            cd /root/log-gateway
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            # Health-Check: alle 4 Gateway-Instanzen müssen healthy sein (max 60s)
+            for i in $(seq 1 20); do
+              HEALTHY=$(docker compose -f docker-compose.prod.yml ps --format json 2>/dev/null \
+                | python3 -c "
+import sys, json
+data = sys.stdin.read().strip().splitlines()
+healthy = sum(1 for line in data if line.strip()
+              and json.loads(line).get('Health','') == 'healthy'
+              and 'gateway_' in json.loads(line).get('Name',''))
+print(healthy)
+" 2>/dev/null || echo "0")
+              echo "Health check $i/20: $HEALTHY/4 gateway instances healthy"
+              if [ "$HEALTHY" = "4" ]; then
+                echo "✓ All 4 gateway instances healthy — deployment successful!"
+                docker image prune -f --filter "until=24h" 2>/dev/null || true
                 exit 0
               fi
               sleep 3
             done
-            echo "Health-Check failed"
-            docker logs log-gateway --tail 20
+
+            echo "✗ Health-Check failed after 60s"
+            docker compose -f docker-compose.prod.yml ps
+            docker compose -f docker-compose.prod.yml logs --tail 20 gateway_1
             exit 1
           ENDSSH
