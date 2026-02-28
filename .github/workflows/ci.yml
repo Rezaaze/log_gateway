@@ -195,25 +195,17 @@ jobs:
 
             # Health-Check: alle 4 Gateway-Instanzen müssen healthy sein (max 60s)
             for i in $(seq 1 20); do
-              HEALTHY=$(docker compose -f docker-compose.prod.yml ps --format json 2>/dev/null \
-                | python3 -c "
-import sys, json
-data = sys.stdin.read().strip().splitlines()
-healthy = sum(1 for line in data if line.strip()
-              and json.loads(line).get('Health','') == 'healthy'
-              and 'gateway_' in json.loads(line).get('Name',''))
-print(healthy)
-" 2>/dev/null || echo "0")
+              HEALTHY=$(docker ps --filter "health=healthy" --format "{{.Names}}" | grep -c "^gateway_" || true)
               echo "Health check $i/20: $HEALTHY/4 gateway instances healthy"
-              if [ "$HEALTHY" = "4" ]; then
-                echo "✓ All 4 gateway instances healthy — deployment successful!"
+              if [ "$HEALTHY" -ge 4 ]; then
+                echo "All 4 gateway instances healthy — deployment successful!"
                 docker image prune -f --filter "until=24h" 2>/dev/null || true
                 exit 0
               fi
               sleep 3
             done
 
-            echo "✗ Health-Check failed after 60s"
+            echo "Health-Check failed after 60s"
             docker compose -f docker-compose.prod.yml ps
             docker compose -f docker-compose.prod.yml logs --tail 20 gateway_1
             exit 1
