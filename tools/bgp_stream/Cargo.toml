@@ -18,6 +18,11 @@ tokio = { version = "1", features = ["full"] }
 # WebSocket (TLS-capable, builds on tokio-tungstenite)
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 
+# Explicit rustls for building a connector without ALPN
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "tls12"] }
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+
 # HTTP client with connection pooling / keep-alive
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
@@ -46,5 +51,6 @@ futures-util = "0.3"
 
 # Fast random number (sampling)
 fastrand = "2"
+
 
 # [profile.*] is defined in the workspace root Cargo.toml

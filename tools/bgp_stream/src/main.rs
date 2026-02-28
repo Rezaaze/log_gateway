@@ -36,12 +36,14 @@ use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use futures_util::{SinkExt, StreamExt};
 use log_gateway::models::{LogEntry, LogLevel};
 use reqwest::{header, Client};
+use rustls::RootCertStore;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 use tokio_tungstenite::{
     connect_async_tls_with_config,
     tungstenite::{client::IntoClientRequest, Message},
+    Connector,
 };
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -432,6 +434,16 @@ async fn bgp_stream_task(
     }))
     .unwrap();
 
+    // Build a rustls ClientConfig with WebPKI roots and no ALPN.
+    // Not setting ALPN is critical: if rustls sends "h2" and the server
+    // accepts it, the WebSocket HTTP/1.1 upgrade will fail.
+    let mut root_store = RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let tls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    let connector = Connector::Rustls(std::sync::Arc::new(tls_config));
+
     loop {
         info!("Connecting to {url} ...");
 
@@ -444,11 +456,21 @@ async fn bgp_stream_task(
             }
         };
 
-        let ws_stream = match connect_async_tls_with_config(request, None, false, None).await {
-            Ok((ws, _)) => ws,
-            Err(e) => {
-                warn!("Connect failed: {e} — retry in 3s");
-                sleep(Duration::from_secs(3)).await;
+        let ws_stream = match tokio::time::timeout(
+            Duration::from_secs(20),
+            connect_async_tls_with_config(request, None, false, Some(connector.clone())),
+        )
+        .await
+        {
+            Ok(Ok((ws, _))) => ws,
+            Ok(Err(e)) => {
+                warn!("Connect failed: {e} — retry in 5s");
+                sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+            Err(_) => {
+                warn!("Connect timed out after 20s — retry in 5s");
+                sleep(Duration::from_secs(5)).await;
                 continue;
             }
         };
