@@ -16,6 +16,9 @@ Umgebungsvariablen:
     TENANT_ID        Tenant-ID für Rate-Limit-Test (default: wikipedia)
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -27,11 +30,46 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 # ── Konfiguration ─────────────────────────────────────────────────────────────
-GATEWAY_URL  = os.environ.get("GATEWAY_URL",     "http://localhost:8090")
-API_KEY      = os.environ.get("GATEWAY_API_KEY", "")
-WORKERS      = int(os.environ.get("WORKERS",     "4"))
-BATCH_SIZE   = int(os.environ.get("BATCH_SIZE",  "1"))
-TENANT_ID    = os.environ.get("TENANT_ID",       "wikipedia")
+GATEWAY_URL  = os.environ.get("GATEWAY_URL",      "http://localhost:8090")
+API_KEY      = os.environ.get("GATEWAY_API_KEY",  "")
+JWT_SECRET   = os.environ.get("GATEWAY_JWT_SECRET", "")
+WORKERS      = int(os.environ.get("WORKERS",      "4"))
+BATCH_SIZE   = int(os.environ.get("BATCH_SIZE",   "1"))
+TENANT_ID    = os.environ.get("TENANT_ID",        "wikipedia")
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def make_jwt(secret: str, tenant: str) -> str:
+    """Erstellt einen HS256 JWT ohne externe Abhängigkeiten."""
+    header  = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    now     = int(time.time())
+    payload = _b64url(json.dumps({
+        "sub": tenant,
+        "tenant_id": tenant,
+        "iat": now,
+        "exp": now + 3600,   # 1 Stunde gültig
+    }).encode())
+    signing_input = f"{header}.{payload}".encode()
+    sig = _b64url(hmac.new(secret.encode(), signing_input, hashlib.sha256).digest())
+    return f"{header}.{payload}.{sig}"
+
+
+# JWT einmalig generieren (gültig 1h — wird bei Ablauf erneuert)
+_jwt_token   = ""
+_jwt_expires = 0
+
+
+def get_jwt() -> str:
+    global _jwt_token, _jwt_expires
+    if not JWT_SECRET:
+        return ""
+    if time.time() > _jwt_expires - 60:   # 60s vor Ablauf erneuern
+        _jwt_token   = make_jwt(JWT_SECRET, TENANT_ID)
+        _jwt_expires = int(time.time()) + 3600
+    return _jwt_token
 
 WIKI_STREAM  = "https://stream.wikimedia.org/v2/stream/recentchange"
 INGEST_URL   = f"{GATEWAY_URL}/api/v1/logs"
@@ -69,7 +107,10 @@ def stream_wikipedia():
     print(f"[stream] Verbinde mit {WIKI_STREAM} ...")
     while True:
         try:
-            req = Request(WIKI_STREAM, headers={"Accept": "text/event-stream"})
+            req = Request(WIKI_STREAM, headers={
+                "Accept":     "text/event-stream",
+                "User-Agent": "log-gateway-stresstest/1.0 (https://github.com/Rezaaze/log_gateway; stress test tool)",
+            })
             with urlopen(req, timeout=30) as resp:
                 print("[stream] Verbunden — empfange Events ...")
                 buffer = []
@@ -97,8 +138,9 @@ def build_log_payload(event: dict) -> dict:
     # Wikipedia Event-Felder: type, title, user, wiki, server_name, timestamp, ...
     return {
         "tenant_id":  TENANT_ID,
-        "level":      "INFO",
+        "level":      "info",
         "message":    f"[{event.get('type', 'edit')}] {event.get('title', '')} by {event.get('user', 'anon')}",
+        "source":     event.get("server_name", "wikipedia"),
         "service":    event.get("wiki", "wikipedia"),
         "timestamp":  datetime.now(timezone.utc).isoformat(),
         "metadata": {
@@ -122,6 +164,9 @@ def send_to_gateway(payload: dict) -> bool:
     }
     if API_KEY:
         headers["X-API-Key"] = API_KEY
+    jwt = get_jwt()
+    if jwt:
+        headers["Authorization"] = f"Bearer {jwt}"
 
     try:
         t0 = time.monotonic()
@@ -187,7 +232,8 @@ def main():
     print(f"  Gateway:   {INGEST_URL}")
     print(f"  Tenant:    {TENANT_ID}")
     print(f"  Workers:   {WORKERS}")
-    print(f"  Auth:      {'ja' if API_KEY else 'nein'}")
+    print(f"  API-Key:   {'ja' if API_KEY else 'nein'}")
+    print(f"  JWT:       {'ja' if JWT_SECRET else 'nein'}")
     print("=" * 60)
 
     # Kurzer Verbindungstest
