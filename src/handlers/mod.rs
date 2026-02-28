@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::cache::{CacheEntry, CacheStats, SemanticCache};
 use crate::cost_tracker::{CostTracker, GatewayCostSummary};
 use crate::metrics::GatewayMetrics;
-use crate::models::{IngestResponse, LogEntry, LogLevel};
+use crate::models::{BatchEntryResult, BatchIngestResponse, IngestResponse, LogEntry, LogLevel};
 use crate::redactor::Redactor;
 use crate::s3_exporter::S3Exporter;
 use crate::sink::{SinkRecord, StorageSink};
@@ -250,6 +250,259 @@ pub async fn ingest_log(
     (StatusCode::ACCEPTED, create_headers(&id), Json(response)).into_response()
 }
 
+/// Core processing logic for a single log entry (shared between single + batch handlers).
+///
+/// Returns `(BatchEntryResult, accepted: bool)` so the batch handler can count
+/// accepted / rejected entries without duplicating the pipeline.
+fn process_entry(
+    state: &AppState,
+    entry: LogEntry,
+    tenant_id: &str,
+) -> (BatchEntryResult, bool) {
+    let id = Uuid::new_v4();
+    let key = SemanticCache::make_key(&entry.message);
+
+    if let Some(cached) = state.cache.get(&key) {
+        // Cache HIT
+        info!("Cache HIT (batch): id={}, key={}", id, key);
+        let _ = cached.inspect();
+
+        let bytes = entry.message.len() as u64;
+        state
+            .cost_tracker
+            .record(tenant_id, bytes, cached.pii_hits, true);
+        state.metrics.record_request(bytes, cached.pii_hits, true);
+
+        if let Some(sink) = &state.sink {
+            let record = SinkRecord {
+                id,
+                timestamp: Utc::now(),
+                source: entry.source.clone(),
+                level: format!("{:?}", entry.level),
+                redacted_message: cached.redacted_message.clone(),
+                pii_hits: cached.pii_hits,
+                bytes,
+                cache_hit: true,
+            };
+            sink.write(record);
+        }
+
+        (
+            BatchEntryResult {
+                id,
+                status: "accepted".to_string(),
+                processed_at: Utc::now(),
+                pii_hits: cached.pii_hits,
+                error: None,
+            },
+            true,
+        )
+    } else {
+        // Cache MISS — run PII redaction
+        let result = state.redactor.redact(&entry.message);
+
+        let cache_entry = CacheEntry {
+            redacted_message: result.redacted_text.clone(),
+            pii_hits: result.hit_count,
+            created_at: Utc::now(),
+        };
+        state.cache.insert(key.clone(), cache_entry);
+
+        let bytes = entry.message.len() as u64;
+        state
+            .cost_tracker
+            .record(tenant_id, bytes, result.hit_count, false);
+        state.metrics.record_request(bytes, result.hit_count, false);
+
+        info!(
+            "Cache MISS (batch): id={}, pii_hits={}",
+            id, result.hit_count
+        );
+
+        if let Some(sink) = &state.sink {
+            let record = SinkRecord {
+                id,
+                timestamp: Utc::now(),
+                source: entry.source.clone(),
+                level: format!("{:?}", entry.level),
+                redacted_message: result.redacted_text.clone(),
+                pii_hits: result.hit_count,
+                bytes,
+                cache_hit: false,
+            };
+            sink.write(record);
+        }
+
+        (
+            BatchEntryResult {
+                id,
+                status: "accepted".to_string(),
+                processed_at: Utc::now(),
+                pii_hits: result.hit_count,
+                error: None,
+            },
+            true,
+        )
+    }
+}
+
+// ── Batch endpoint ────────────────────────────────────────────────────────────
+
+const BATCH_MAX_SIZE: usize = 1_000;
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/logs/batch",
+    request_body = Vec<LogEntry>,
+    responses(
+        (status = 202, description = "Batch accepted (partial errors possible)", body = BatchIngestResponse),
+        (status = 400, description = "Invalid JSON or empty batch"),
+        (status = 401, description = "Unauthorized"),
+        (status = 429, description = "Rate limit exceeded"),
+    ),
+    security(("api_key" = []), ("bearer_auth" = []))
+)]
+pub async fn ingest_log_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let start = std::time::Instant::now();
+
+    // 1. Parse outer JSON array
+    let raw_array: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            state.metrics.record_duration(duration_ms);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid JSON: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    let entries_raw = match raw_array.as_array() {
+        Some(arr) => arr,
+        None => {
+            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            state.metrics.record_duration(duration_ms);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "expected a JSON array" })),
+            )
+                .into_response();
+        }
+    };
+
+    if entries_raw.is_empty() {
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        state.metrics.record_duration(duration_ms);
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "batch must not be empty" })),
+        )
+            .into_response();
+    }
+
+    if entries_raw.len() > BATCH_MAX_SIZE {
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        state.metrics.record_duration(duration_ms);
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("batch too large: max {} entries per request", BATCH_MAX_SIZE)
+            })),
+        )
+            .into_response();
+    }
+
+    // 2. Extract tenant ID once for the whole batch
+    let tenant_id = headers
+        .get("X-Tenant-ID")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("anonymous");
+
+    fn is_valid_tenant_id(id: &str) -> bool {
+        id.len() <= 64
+            && id
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    }
+
+    if !is_valid_tenant_id(tenant_id) {
+        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+        state.metrics.record_duration(duration_ms);
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_tenant_id",
+                "hint": "tenant ID must be at most 64 characters and contain only alphanumeric characters, hyphens, and underscores"
+            })),
+        )
+            .into_response();
+    }
+
+    // 3. Process each entry through the full pipeline
+    let mut results: Vec<BatchEntryResult> = Vec::with_capacity(entries_raw.len());
+    let mut accepted = 0usize;
+    let mut rejected = 0usize;
+
+    for raw in entries_raw {
+        // Schema validation per entry
+        if let Err(e) = crate::schema_validator::SchemaValidator::validate(raw) {
+            rejected += 1;
+            results.push(BatchEntryResult {
+                id: Uuid::new_v4(),
+                status: "rejected".to_string(),
+                processed_at: Utc::now(),
+                pii_hits: 0,
+                error: Some(format!("schema validation failed: {}", e)),
+            });
+            continue;
+        }
+
+        // Deserialize into LogEntry
+        let entry: LogEntry = match serde_json::from_value(raw.clone()) {
+            Ok(e) => e,
+            Err(e) => {
+                rejected += 1;
+                results.push(BatchEntryResult {
+                    id: Uuid::new_v4(),
+                    status: "rejected".to_string(),
+                    processed_at: Utc::now(),
+                    pii_hits: 0,
+                    error: Some(format!("invalid log entry: {}", e)),
+                });
+                continue;
+            }
+        };
+
+        // Run the full pipeline (cache / redaction / sink / metrics)
+        let (result, was_accepted) = process_entry(&state, entry, tenant_id);
+        if was_accepted {
+            accepted += 1;
+        } else {
+            rejected += 1;
+        }
+        results.push(result);
+    }
+
+    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+    state.metrics.record_duration(duration_ms);
+
+    (
+        StatusCode::ACCEPTED,
+        Json(BatchIngestResponse {
+            accepted,
+            rejected,
+            results,
+        }),
+    )
+        .into_response()
+}
+
 #[utoipa::path(
     get,
     path = "/health",
@@ -389,8 +642,12 @@ pub async fn trigger_s3_export(
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(ingest_log, health_check, cache_stats, cost_summary, trigger_s3_export),
-    components(schemas(LogEntry, LogLevel, IngestResponse, HealthResponse, HealthChecks)),
+    paths(ingest_log, ingest_log_batch, health_check, cache_stats, cost_summary, trigger_s3_export),
+    components(schemas(
+        LogEntry, LogLevel, IngestResponse,
+        BatchIngestResponse, BatchEntryResult,
+        HealthResponse, HealthChecks
+    )),
     modifiers(&SecurityAddon),
     info(
         title = "Log Gateway API",

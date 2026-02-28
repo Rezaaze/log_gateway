@@ -104,6 +104,11 @@ pub fn create_app(config: GatewayConfig) -> Result<Router> {
             "/api/v1/logs",
             post(handlers::ingest_log).layer(DefaultBodyLimit::max(65_536)),
         )
+        .route(
+            "/api/v1/logs/batch",
+            // 1 000 entries × ~1 KB each = ~1 MB; allow up to 4 MB for headroom
+            post(handlers::ingest_log_batch).layer(DefaultBodyLimit::max(4_194_304)),
+        )
         .route("/api/v1/cache/stats", get(handlers::cache_stats))
         .route("/api/v1/costs", get(handlers::cost_summary))
         .route("/api/v1/costs/:tenant_id", get(handlers::tenant_cost))
@@ -192,6 +197,10 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
         .route(
             "/api/v1/logs",
             post(handlers::ingest_log).layer(DefaultBodyLimit::max(65_536)),
+        )
+        .route(
+            "/api/v1/logs/batch",
+            post(handlers::ingest_log_batch).layer(DefaultBodyLimit::max(4_194_304)),
         )
         .route("/api/v1/cache/stats", get(handlers::cache_stats))
         .route("/api/v1/costs", get(handlers::cost_summary))

@@ -342,3 +342,213 @@ async fn test_ingest_rejects_oversized_body() -> Result<()> {
     handle.abort();
     Ok(())
 }
+
+// ── Batch endpoint tests ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_batch_ingest_success() -> Result<()> {
+    let (base_url, handle) = spawn_test_server().await?;
+    let client = Client::new();
+
+    let response = client
+        .post(format!("{}/api/v1/logs/batch", base_url))
+        .json(&json!([
+            {"level": "info",  "source": "svc-a", "message": "batch entry one"},
+            {"level": "warn",  "source": "svc-b", "message": "batch entry two"},
+            {"level": "error", "source": "svc-c", "message": "batch entry three"},
+        ]))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["accepted"], 3, "all three entries should be accepted");
+    assert_eq!(body["rejected"], 0);
+    assert_eq!(body["results"].as_array().unwrap().len(), 3);
+
+    // Every accepted result has a unique id and status "accepted"
+    let results = body["results"].as_array().unwrap();
+    let ids: std::collections::HashSet<&str> = results
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 3, "each batch entry must receive a unique id");
+    for r in results {
+        assert_eq!(r["status"], "accepted");
+        assert!(r.get("error").is_none(), "accepted entries should not have an error field");
+    }
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_batch_partial_rejection() -> Result<()> {
+    let (base_url, handle) = spawn_test_server().await?;
+    let client = Client::new();
+
+    // One valid, one missing "level" (schema error)
+    let response = client
+        .post(format!("{}/api/v1/logs/batch", base_url))
+        .json(&json!([
+            {"level": "info", "source": "svc-a", "message": "valid entry"},
+            {"source": "svc-b", "message": "missing level field"},
+        ]))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["accepted"], 1);
+    assert_eq!(body["rejected"], 1);
+    assert_eq!(body["results"].as_array().unwrap().len(), 2);
+
+    // Second result should be rejected with an error message
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results[0]["status"], "accepted");
+    assert_eq!(results[1]["status"], "rejected");
+    assert!(results[1]["error"].as_str().is_some());
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_batch_empty_array_rejected() -> Result<()> {
+    let (base_url, handle) = spawn_test_server().await?;
+    let client = Client::new();
+
+    let response = client
+        .post(format!("{}/api/v1/logs/batch", base_url))
+        .json(&json!([]))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = response.json().await?;
+    assert!(body["error"].as_str().unwrap().contains("empty"));
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_batch_not_array_rejected() -> Result<()> {
+    let (base_url, handle) = spawn_test_server().await?;
+    let client = Client::new();
+
+    // Send a single object, not an array
+    let response = client
+        .post(format!("{}/api/v1/logs/batch", base_url))
+        .json(&json!({"level": "info", "source": "svc", "message": "not an array"}))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = response.json().await?;
+    assert!(body["error"].as_str().unwrap().contains("array"));
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_batch_pii_redaction() -> Result<()> {
+    let (base_url, handle) = spawn_test_server().await?;
+    let client = Client::new();
+
+    let response = client
+        .post(format!("{}/api/v1/logs/batch", base_url))
+        .json(&json!([
+            {"level": "info", "source": "svc", "message": "user email is test@example.com"},
+            {"level": "info", "source": "svc", "message": "no pii here"},
+        ]))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let body: serde_json::Value = response.json().await?;
+    let results = body["results"].as_array().unwrap();
+
+    assert_eq!(results[0]["pii_hits"], 1, "first entry should have 1 PII hit (email)");
+    assert_eq!(results[1]["pii_hits"], 0, "second entry has no PII");
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_batch_cache_deduplication() -> Result<()> {
+    let (base_url, handle) = spawn_test_server().await?;
+    let client = Client::new();
+
+    // Send 3 entries with the same message — only first is a cache miss
+    let response = client
+        .post(format!("{}/api/v1/logs/batch", base_url))
+        .json(&json!([
+            {"level": "info", "source": "svc", "message": "deduplicated batch message"},
+            {"level": "info", "source": "svc", "message": "deduplicated batch message"},
+            {"level": "info", "source": "svc", "message": "deduplicated batch message"},
+        ]))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        response.json::<serde_json::Value>().await?["accepted"],
+        3,
+        "all three entries accepted even if two are cache hits"
+    );
+
+    // Verify cache stats: 1 miss + 2 hits
+    let stats: serde_json::Value = client
+        .get(format!("{}/api/v1/cache/stats", base_url))
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    assert_eq!(stats["cache_misses"], 1);
+    assert_eq!(stats["cache_hits"], 2);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_batch_tenant_cost_tracking() -> Result<()> {
+    let (base_url, handle) = spawn_test_server().await?;
+    let client = Client::new();
+
+    client
+        .post(format!("{}/api/v1/logs/batch", base_url))
+        .header("X-Tenant-ID", "batch-tenant")
+        .json(&json!([
+            {"level": "info", "source": "svc", "message": "batch cost test one"},
+            {"level": "warn", "source": "svc", "message": "batch cost test two"},
+        ]))
+        .send()
+        .await?;
+
+    let cost: serde_json::Value = client
+        .get(format!("{}/api/v1/costs", base_url))
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    let tenant = cost["tenants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["tenant_id"] == "batch-tenant")
+        .expect("batch-tenant must appear in cost summary");
+
+    assert_eq!(tenant["total_requests"].as_u64().unwrap(), 2);
+
+    handle.abort();
+    Ok(())
+}

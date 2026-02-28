@@ -33,6 +33,26 @@ pub struct IngestResponse {
     pub pii_hits: usize,
 }
 
+/// Response for a single entry within a batch request.
+/// If `error` is Some, the entry was rejected; otherwise it was accepted.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct BatchEntryResult {
+    pub id: Uuid,
+    pub status: String,
+    pub processed_at: DateTime<Utc>,
+    pub pii_hits: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Top-level response for POST /api/v1/logs/batch
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct BatchIngestResponse {
+    pub accepted: usize,
+    pub rejected: usize,
+    pub results: Vec<BatchEntryResult>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
