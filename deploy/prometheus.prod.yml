@@ -1,0 +1,44 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: "log-gateway-cluster"
+
+rule_files:
+  - "alertmanager/alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # ── Alle 4 Gateway-Instanzen einzeln scrapen ──────────────────────────────
+  # Jede Instanz bekommt ein eigenes instance-Label für Grafana-Vergleich
+  - job_name: "log-gateway"
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["gateway_1:8080"]
+        labels:
+          instance: "gateway_1"
+          cpuset: "0"
+      - targets: ["gateway_2:8080"]
+        labels:
+          instance: "gateway_2"
+          cpuset: "1"
+      - targets: ["gateway_3:8080"]
+        labels:
+          instance: "gateway_3"
+          cpuset: "2"
+      - targets: ["gateway_4:8080"]
+        labels:
+          instance: "gateway_4"
+          cpuset: "3"
+    metrics_path: "/metrics"
+
+  # ── Nginx Load Balancer ───────────────────────────────────────────────────
+  - job_name: "nginx"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["nginx-lb:8090"]
+    metrics_path: "/nginx-health"        # Einfacher Liveness-Check
