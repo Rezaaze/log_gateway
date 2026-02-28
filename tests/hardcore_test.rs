@@ -68,7 +68,11 @@ async fn chaos_empty_body() -> Result<()> {
         .body("")
         .send()
         .await?;
-    assert_eq!(r.status(), StatusCode::BAD_REQUEST, "empty body must be 400");
+    assert_eq!(
+        r.status(),
+        StatusCode::BAD_REQUEST,
+        "empty body must be 400"
+    );
     h.abort();
     Ok(())
 }
@@ -126,8 +130,7 @@ async fn chaos_null_required_fields() -> Result<()> {
         .send()
         .await?;
     assert!(
-        r.status() == StatusCode::BAD_REQUEST
-            || r.status() == StatusCode::UNPROCESSABLE_ENTITY,
+        r.status() == StatusCode::BAD_REQUEST || r.status() == StatusCode::UNPROCESSABLE_ENTITY,
         "null fields must be rejected"
     );
     h.abort();
@@ -144,8 +147,7 @@ async fn chaos_json_array_instead_of_object() -> Result<()> {
         .send()
         .await?;
     assert!(
-        r.status() == StatusCode::BAD_REQUEST
-            || r.status() == StatusCode::UNPROCESSABLE_ENTITY,
+        r.status() == StatusCode::BAD_REQUEST || r.status() == StatusCode::UNPROCESSABLE_ENTITY,
         "JSON array must be rejected"
     );
     h.abort();
@@ -552,10 +554,7 @@ async fn edge_request_id_consistent_in_header_and_body() -> Result<()> {
     let body_id = body["id"].as_str().unwrap_or("").to_string();
 
     assert!(!header_id.is_empty(), "x-request-id header must be present");
-    assert_eq!(
-        header_id, body_id,
-        "x-request-id header must match body id"
-    );
+    assert_eq!(header_id, body_id, "x-request-id header must match body id");
     h.abort();
     Ok(())
 }
@@ -748,7 +747,11 @@ async fn load_concurrent_multi_tenant_cost_tracking() -> Result<()> {
         .json()
         .await?;
     let tenants = costs["tenants"].as_array().unwrap();
-    assert_eq!(tenants.len(), 10, "expected exactly 10 tenants in cost summary");
+    assert_eq!(
+        tenants.len(),
+        10,
+        "expected exactly 10 tenants in cost summary"
+    );
 
     // Each tenant must have exactly 50 requests (500 / 10)
     for t in tenants {
@@ -788,11 +791,12 @@ async fn load_health_responsive_under_load() -> Result<()> {
 
     // Simultaneously poll health 10 times
     for _ in 0..10 {
-        let r = client
-            .get(format!("{}/health", url))
-            .send()
-            .await?;
-        assert_eq!(r.status(), StatusCode::OK, "health must stay 200 under load");
+        let r = client.get(format!("{}/health", url)).send().await?;
+        assert_eq!(
+            r.status(),
+            StatusCode::OK,
+            "health must stay 200 under load"
+        );
     }
 
     for t in load_tasks {
