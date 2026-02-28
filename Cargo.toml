@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "tools/bgp_stream"]
+resolver = "2"
+
 [package]
 name = "log-gateway"
 version = "0.1.0"
