@@ -369,14 +369,15 @@ async fn test_batch_ingest_success() -> Result<()> {
 
     // Every accepted result has a unique id and status "accepted"
     let results = body["results"].as_array().unwrap();
-    let ids: std::collections::HashSet<&str> = results
-        .iter()
-        .map(|r| r["id"].as_str().unwrap())
-        .collect();
+    let ids: std::collections::HashSet<&str> =
+        results.iter().map(|r| r["id"].as_str().unwrap()).collect();
     assert_eq!(ids.len(), 3, "each batch entry must receive a unique id");
     for r in results {
         assert_eq!(r["status"], "accepted");
-        assert!(r.get("error").is_none(), "accepted entries should not have an error field");
+        assert!(
+            r.get("error").is_none(),
+            "accepted entries should not have an error field"
+        );
     }
 
     handle.abort();
@@ -473,7 +474,10 @@ async fn test_batch_pii_redaction() -> Result<()> {
     let body: serde_json::Value = response.json().await?;
     let results = body["results"].as_array().unwrap();
 
-    assert_eq!(results[0]["pii_hits"], 1, "first entry should have 1 PII hit (email)");
+    assert_eq!(
+        results[0]["pii_hits"], 1,
+        "first entry should have 1 PII hit (email)"
+    );
     assert_eq!(results[1]["pii_hits"], 0, "second entry has no PII");
 
     handle.abort();

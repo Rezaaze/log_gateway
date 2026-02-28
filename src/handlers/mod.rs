@@ -254,11 +254,7 @@ pub async fn ingest_log(
 ///
 /// Returns `(BatchEntryResult, accepted: bool)` so the batch handler can count
 /// accepted / rejected entries without duplicating the pipeline.
-fn process_entry(
-    state: &AppState,
-    entry: LogEntry,
-    tenant_id: &str,
-) -> (BatchEntryResult, bool) {
+fn process_entry(state: &AppState, entry: LogEntry, tenant_id: &str) -> (BatchEntryResult, bool) {
     let id = Uuid::new_v4();
     let key = SemanticCache::make_key(&entry.message);
 
