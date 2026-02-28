@@ -34,6 +34,17 @@ A production-grade, high-performance Rust log processing gateway — built as a 
 | 3 | zstd Level 1 (was 3) | −40% compress CPU |
 | 3 | Tokio worker-count startup log | production observability |
 
+## Benchmark Results (Hetzner ARM64, release build)
+
+| Scenario | Req/s | p50 | p95 | p99 |
+|---|---|---|---|---|
+| `/health` baseline | 131.866 | 0.35 ms | 0.67 ms | 0.70 ms |
+| Ingest — simple payload | 83.504 | 0.56 ms | 0.99 ms | 1.33 ms |
+| Ingest — 5x PII (cache miss) | 61.155 | 0.75 ms | 1.40 ms | 2.73 ms |
+| Ingest — 8192 char message | 49.685 | 0.91 ms | 1.69 ms | 3.79 ms |
+| Ingest — 20KB metadata | 18.287 | 1.78 ms | 3.96 ms | 31.88 ms |
+| 4-instance cluster (aggregate) | ~23.000 | — | — | — |
+
 ## Stack
 
 ```
@@ -46,24 +57,57 @@ Rust 2021 · Tokio · Axum 0.7 · Prometheus · Grafana · AlertManager · MinIO
 # Run locally (no auth, no TLS)
 cargo run
 
-# Run tests
+# Run tests (105 total)
 cargo test
 
 # Lint & format
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
-# Benchmarks
+# Criterion benchmarks (redactor + cache key)
 cargo bench
+
+# HTTP benchmark (requires oha: cargo install oha)
+oha -n 10000 -c 50 --no-tui -m POST \
+  -H "Content-Type: application/json" \
+  -d '{"source":"bench","level":"info","message":"hello"}' \
+  http://localhost:8080/api/v1/logs
 ```
 
-## Docker Compose (full stack)
+## Docker Compose
+
+### Development (single instance)
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 Services: `gateway` (8080) · `prometheus` (9090) · `alertmanager` (9093) · `grafana` (3000) · `minio` (9000/9001)
+
+### Production (4-instance cluster)
+
+```bash
+# Build image + deploy cluster
+./deploy-cluster.sh --build
+
+# Rollback to single instance
+./deploy-cluster.sh --rollback
+```
+
+Architecture:
+```
+Internet :8090
+  └── nginx-lb  (ip_hash load balancer)
+       ├── gateway_1  CPU 0
+       ├── gateway_2  CPU 1
+       ├── gateway_3  CPU 2
+       └── gateway_4  CPU 3
+```
+
+- `ip_hash` routes each client IP to the same instance → maximizes per-instance cache hit rate
+- Each instance pinned to one vCPU via `cpuset` → no migration overhead
+- Only Nginx is externally reachable; gateways are isolated in `gateway-net`
+- Prometheus scrapes all 4 instances individually with `instance` labels
 
 ## Configuration
 
@@ -113,7 +157,7 @@ Both are **optional** — omit the secret to disable the check.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/logs` | ✅ | Ingest a log entry |
+| `POST` | `/api/v1/logs` | ✅ | Ingest a log entry (max 64KB body) |
 | `GET` | `/api/v1/cache/stats` | ✅ | Cache hit/miss statistics |
 | `GET` | `/api/v1/costs` | ✅ | Cost summary (all tenants) |
 | `GET` | `/api/v1/costs/:tenant_id` | ✅ | Cost for a specific tenant |
