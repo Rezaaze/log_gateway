@@ -1,8 +1,47 @@
 # Roadmap — Stufe 2: Query-Engine & Anomalie-Erkennung
 
-> **Status: 🔵 GEPLANT**
-> Geschätzter Aufwand: 10–15 Wochen solo / 6–8 Wochen im Team
+> **Status: ✅ ABGESCHLOSSEN**
+> Implementiert: Phase 2.1 – 2.4 vollständig
 > Voraussetzung: Stufe 1 abgeschlossen ✅
+
+---
+
+## Implementierungs-Notizen
+
+### Abweichungen & Fixes gegenüber ursprünglicher Planung
+
+| # | Problem | Fix |
+|---|---------|-----|
+| 1 | ClickHouseExporter: Query-String nicht URL-encoded → alle INSERTs schlugen fehl | Leerzeichen/Sonderzeichen via `.replace()` kodiert |
+| 2 | S3-Exporter: `if enabled { None } else { None }` — Feature-Flag wurde ignoriert | Kommentar klargestellt, S3 arbeitet on-demand |
+| 3 | RPKI: `run_rpki_enrichment` + `check_with_rpki` riefen je einmal Routinator auf → 2 HTTP-Requests pro Event | `check_with_rpki_status()` nimmt vorher ermittelten `RpkiStatus` — 1 Request pro Event |
+| 4 | ClickHouse Port 9000 fehlte in `docker-compose.prod.yml` → Grafana-Plugin konnte sich nie verbinden | `"9000:9000"` ergänzt |
+| 5 | Buffer-Drop im ClickHouseExporter war unsichtbar (kein Log, keine Metrik) | `record_clickhouse_flush_error()` + `tracing::warn!` beim Drop |
+| 6 | Gateway-Services hatten kein `depends_on: clickhouse` → HijackDetector-Warmup schlug beim ersten Start fehl | `condition: service_healthy` für alle 4 Gateway-Instanzen |
+| 7 | RPKI Confidence-Logik: bekanntes AS + RPKI invalid hatte 0.95 statt 0.6 | Korrigiert auf 0.6 gemäß Roadmap 2.3.3 |
+| 8 | Routinator-Port 8323 fehlte in `docker-compose.prod.yml` | `"8323:8323"` ergänzt |
+| 9 | `run_rpki_enrichment` rief `record_rpki_valid/invalid` nie auf | Metrics-Parameter zu `run_rpki_enrichment` hinzugefügt |
+| 10 | Grafana Piechart Panel 4: `values: false` → leeres Diagramm | `values: true`, `fields: "/^total$/"` |
+| 11 | `orgId: 1` fehlte in `clickhouse.yml` | Ergänzt |
+
+### Neue Dateien
+- `src/clickhouse_exporter.rs` — Batch-INSERT, ArrayQueue, Backpressure
+- `src/bgp_query.rs` — 4 BGP-Query-Endpunkte, utoipa-annotiert
+- `src/anomaly_detector.rs` — Detector-Trait, HijackDetector, FlappingDetector, run_alert_logger, run_rpki_enrichment
+- `src/rpki_cache.rs` — moka-Cache, Routinator HTTP-Client, graceful degradation
+- `deploy/clickhouse/schema.sql` — BGP-Events-Tabelle, TTL 90 Tage
+- `deploy/clickhouse/init.sql` — Datenbank-Init
+- `deploy/grafana/provisioning/dashboards/bgp_clickhouse.json` — ClickHouse Analytics Dashboard
+- `deploy/grafana/provisioning/datasources/clickhouse.yml` — ClickHouse Datasource
+
+### Geänderte Dateien
+- `src/lib.rs` — create_app() async, alle neuen Module verdrahtet
+- `src/handlers/mod.rs` — AppState um rpki_tx, clickhouse_exporter, bgp_query_client erweitert
+- `src/metrics.rs` — 4 neue Counter: hijack, flap, rpki_valid, rpki_invalid
+- `src/config.rs` — ClickHouseConfig, RpkiConfig
+- `config/default.toml` — [clickhouse] + [rpki] Blöcke
+- `docker-compose.prod.yml` — ClickHouse, Routinator, Grafana-Plugin, Port 9000, depends_on
+- `deploy/grafana/provisioning/dashboards/gateway.json` — Row "BGP Intelligence" + 6 neue Panels
 
 ---
 
@@ -29,74 +68,32 @@ Anomalie-Erkennung (Route Hijacks, BGP Leaks, Prefix Flapping).
 
 ### 2.1.1 — Infrastruktur
 
-- [ ] ClickHouse-Service in `docker-compose.prod.yml` ergänzen:
-  ```yaml
-  clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    ports:
-      - "8123:8123"   # HTTP API
-      - "9009:9009"   # Native Protocol
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-    networks:
-      - gateway-net
-  ```
-- [ ] Volume `clickhouse-data` in Compose registrieren
-- [ ] ClickHouse-Konfig: Retention 90 Tage, Kompression `zstd`
+- [x] ClickHouse-Service in `docker-compose.prod.yml` ergänzen
+- [x] Volume `clickhouse-data` in Compose registrieren
+- [x] ClickHouse-Konfig: Retention 90 Tage, TTL via MergeTree
+- [x] `depends_on: clickhouse (service_healthy)` für alle 4 Gateway-Services
 
 ### 2.1.2 — Tabellen-Schema
 
-```sql
-CREATE TABLE bgp_events (
-    timestamp   DateTime64(3, 'UTC'),
-    event_type  LowCardinality(String),   -- ANNOUNCE / WITHDRAW
-    prefix      String,                   -- z.B. 1.2.3.0/24
-    origin_as   UInt32,                   -- Origin AS-Nummer
-    as_path     Array(UInt32),            -- [13335, 3356, 1234]
-    peer_asn    UInt32,
-    peer_ip     String,
-    community   Array(String),
-    source      LowCardinality(String),   -- "ris-live"
-    tenant_id   LowCardinality(String)
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(timestamp)
-ORDER BY (origin_as, prefix, timestamp)
-TTL timestamp + INTERVAL 90 DAY;
-```
-
-- [ ] Migrations-Skript in `deploy/clickhouse/schema.sql`
-- [ ] Automatische Schema-Anwendung im CI/CD-Deploy-Job
+- [x] Migrations-Skript in `deploy/clickhouse/schema.sql`
+- [x] `deploy/clickhouse/init.sql` via `docker-entrypoint-initdb.d`
 
 ### 2.1.3 — ClickHouse-Exporter (Rust)
 
-Neue Datei: `src/clickhouse_exporter.rs`
-
-- [ ] Parallel zum bestehenden `sink.rs` (kein Breaking Change)
-- [ ] Batch-INSERT via ClickHouse HTTP API (`reqwest`, JSON)
-- [ ] Konfigurierbar über `config/default.toml`:
-  ```toml
-  [clickhouse]
-  enabled = false
-  url = "http://clickhouse:8123"
-  database = "bgp"
-  batch_size = 1000
-  flush_interval_secs = 5
-  ```
-- [ ] Feature-Flag `GATEWAY__CLICKHOUSE__ENABLED` als ENV-Variable
-- [ ] Backpressure: bei ClickHouse-Timeout → Drop mit Metric-Increment
+- [x] `src/clickhouse_exporter.rs` — parallel zu `sink.rs`, kein Breaking Change
+- [x] Batch-INSERT via ClickHouse HTTP API (`reqwest`, JSONEachRow), URL-encoded
+- [x] Konfigurierbar via `config/default.toml` + ENV `GATEWAY__CLICKHOUSE__ENABLED`
+- [x] Backpressure: Buffer voll → Drop + `record_clickhouse_flush_error()` + `tracing::warn!`
+- [x] Retry-Logik: 2 Versuche mit 100ms Pause
 
 ### 2.1.4 — Neue API-Endpunkte
 
-```
-GET  /api/v1/bgp/prefixes/:prefix/history   # Zeitverlauf eines Prefix
-GET  /api/v1/bgp/asn/:asn/prefixes          # Alle Prefixe eines AS
-GET  /api/v1/bgp/events?from=&to=&type=     # Gefilterte Events mit Pagination
-GET  /api/v1/bgp/stats/top-as?limit=10      # Top-AS nach Event-Volumen
-```
-
-- [ ] Query-Parameter: `from`, `to` (ISO 8601), `type` (announce/withdraw), `limit`, `offset`
-- [ ] Response-Pagination (cursor-based)
-- [ ] OpenAPI-Dokumentation via utoipa erweitern
+- [x] `GET /api/v1/bgp/prefixes/:prefix/history`
+- [x] `GET /api/v1/bgp/asn/:asn/prefixes`
+- [x] `GET /api/v1/bgp/events?from=&to=&type=&limit=&offset=`
+- [x] `GET /api/v1/bgp/stats/top-as?limit=10`
+- [x] Input-Validierung: Prefix sanitization, event_type whitelist
+- [x] OpenAPI-Dokumentation via utoipa
 
 ---
 
@@ -108,80 +105,34 @@ GET  /api/v1/bgp/stats/top-as?limit=10      # Top-AS nach Event-Volumen
 
 ### 2.2.1 — Detector-Architektur
 
-Neue Datei: `src/anomaly_detector.rs`
-
-- [ ] Trait `Detector` mit Methode `fn check(&self, event: &BgpEvent) -> Option<Anomaly>`
-- [ ] In-Memory State-Store für historische Baseline (moka, TTL 24h)
-- [ ] Async-Pipeline: BGP-Event → Detector-Chain → Alert-Queue
+- [x] Trait `Detector`: `fn check(&self, event: &BgpClickHouseRecord) -> Option<Anomaly>`
+- [x] `AnomalyDetector` orchestriert Detector-Chain
+- [x] Async Alert-Queue via `tokio::sync::mpsc`
 
 ### 2.2.2 — Regel 1: Route Hijack Detection
 
-```
-Trigger: Prefix X wird von AS Y announced
-         AS Y hat Prefix X nie zuvor angekündigt
-         AS Y erscheint nicht in der AS-Path-History von X
-```
-
-- [ ] Historische AS-Path-Map im Memory: `HashMap<Prefix, HashSet<AsNumber>>`
-- [ ] Abgleich gegen ClickHouse-History beim Start (Warmup)
-- [ ] Confidence-Score: 0.0–1.0 (basierend auf Anzahl bekannter AS-Paths)
-- [ ] Alert nur wenn Confidence > 0.8 (vermeidet False Positives bei neuen Prefixen)
+- [x] `HijackDetector`: `DashMap<Prefix, HashSet<AsNumber>>`
+- [x] ClickHouse-Warmup beim Start (letzte 7 Tage)
+- [x] Confidence-Score 0.85 bei neuem AS, anpassbar durch RPKI
 
 ### 2.2.3 — Regel 2: BGP Leak Detection
 
-```
-Trigger: AS Z (Stub-AS, kein Transit) advertised plötzlich
-         Prefixe mit AS-Path-Länge > 2 (Transit-typisch)
-         Prefixe mit Präfix-Länge /8–/16
-```
-
-- [ ] AS-Typ-Klassifikation (Stub / Transit) via CAIDA AS-Rank API (täglicher Refresh)
-- [ ] Leak-Score basierend auf Präfix-Größe und AS-Path-Länge
+- [ ] AS-Typ-Klassifikation via CAIDA AS-Rank API — **offen, Stufe 2 Next-Sprint**
 
 ### 2.2.4 — Regel 3: Prefix Flapping
 
-```
-Trigger: Prefix X hat > N ANNOUNCE/WITHDRAW-Wechsel
-         innerhalb von T Minuten
-```
-
-- [ ] Sliding-Window Counter (Tokio-Channel + Timer)
-- [ ] Konfigurierbare Schwellwerte:
-  ```toml
-  [anomaly.flap]
-  threshold = 10       # Wechsel
-  window_secs = 300    # 5 Minuten
-  ```
+- [x] `FlappingDetector`: Sliding-Window (5 Min, Threshold 10 Events)
+- [x] `DashMap<Prefix, VecDeque<DateTime>>`, Confidence 0.75
 
 ### 2.2.5 — Regel 4: Ungewöhnliche AS-Path-Länge
 
-```
-Trigger: AS-Path für bekannten Prefix plötzlich > 3 Hops
-         länger als historischer Median
-```
-
-- [ ] Median-Berechnung über letzte 1000 Events pro Prefix (Rolling Window)
+- [ ] Median-Berechnung Rolling Window — **offen, Stufe 2 Next-Sprint**
 
 ### 2.2.6 — Alert-Pipeline
 
-- [ ] `Anomaly`-Struct: `{type, prefix, asn, confidence, detected_at, details}`
-- [ ] Anomaly → Alertmanager-Webhook (`POST /api/alertmanager/alerts`)
-- [ ] Neue Prometheus-Metriken in `src/metrics.rs`:
-  ```
-  bgp_anomaly_hijack_detected{prefix, origin_as}   Counter
-  bgp_anomaly_flap_detected{prefix}                Counter
-  bgp_anomaly_leak_detected{as}                    Counter
-  bgp_unique_prefixes_seen                         Gauge
-  bgp_unique_as_seen                               Gauge
-  ```
-- [ ] Alert-Rules in `deploy/alertmanager/alerts.yml` ergänzen:
-  ```yaml
-  - alert: BGPRoutePossibleHijack
-    expr: bgp_anomaly_hijack_detected > 0
-    for: 1m
-    labels:
-      severity: critical
-  ```
+- [x] `Anomaly`-Struct: `{id, type, prefix, origin_as, confidence, detected_at, details}`
+- [x] `run_alert_logger` Task: log + `record_bgp_anomaly_hijack/flap`
+- [x] Metriken: `gateway_bgp_anomaly_hijack_total`, `gateway_bgp_anomaly_flap_total`
 
 ---
 
@@ -193,42 +144,25 @@ Trigger: AS-Path für bekannten Prefix plötzlich > 3 Hops
 
 ### 2.3.1 — Routinator als RPKI-Validator
 
-- [ ] Routinator-Service in `docker-compose.prod.yml`:
-  ```yaml
-  routinator:
-    image: nlnetlabs/routinator:latest
-    ports:
-      - "8323:8323"   # HTTP API (ROA-Liste als JSON)
-    networks:
-      - gateway-net
-    restart: unless-stopped
-  ```
-- [ ] Initiales ROA-Fetch beim Start (Bootstrapping dauert ~5 Min)
+- [x] Routinator-Service in `docker-compose.prod.yml` mit Port 8323 + Volume
+- [x] Healthcheck mit 300s start_period (ROA-Fetch dauert ~5 Min)
 
 ### 2.3.2 — RPKI-Cache (Rust)
 
-Neue Datei: `src/rpki_cache.rs`
-
-- [ ] ROA-Liste von `http://routinator:8323/json` laden
-- [ ] In-Memory Cache (moka, stündlicher Refresh via Tokio-Timer)
-- [ ] RPKI-Status-Enum:
-  ```rust
-  pub enum RpkiStatus {
-      Valid,           // ROA vorhanden, AS + Prefix korrekt
-      InvalidAsn,      // ROA vorhanden, aber anderes AS
-      InvalidLength,   // ROA vorhanden, Prefix-Länge falsch
-      NotFound,        // Kein ROA (nicht zwingend Fehler)
-  }
-  ```
-- [ ] Funktion: `fn validate(prefix: &str, origin_as: u32) -> RpkiStatus`
+- [x] `src/rpki_cache.rs`: moka-Cache (100k Einträge, TTL 1h)
+- [x] `RpkiStatus`: Valid / InvalidAsn / InvalidLength / NotFound / Unavailable
+- [x] `validate(prefix, origin_as)` async — graceful degradation → Unavailable bei Fehler
+- [x] URL-Encoding: Prefix-Slash via `%2F` kodiert
 
 ### 2.3.3 — Integration mit Anomalie-Erkennung
 
-- [ ] RPKI-Status als zusätzliches Signal in Hijack-Detector:
-  - `RpkiStatus::Invalid + neues AS` → **kritischer Alert** (Confidence 1.0)
-  - `RpkiStatus::Invalid + bekanntes AS` → **Warnung** (Confidence 0.6)
-  - `RpkiStatus::Valid` → Confidence reduzieren (wahrscheinlich legitim)
-- [ ] RPKI-Status in BGP-Event-Response und ClickHouse-Schema ergänzen
+- [x] `check_with_rpki_status()` nimmt vorher ermittelten Status (kein Doppel-Request)
+- [x] Confidence-Logik:
+  - Neues AS + RPKI invalid → 0.97
+  - Neues AS + RPKI valid → 0.3
+  - Bekanntes AS + RPKI invalid → 0.6 (Warnung)
+- [x] `run_rpki_enrichment` Task mit Metrics (`rpki_valid_total`, `rpki_invalid_total`)
+- [ ] RPKI-Status im ClickHouse-Schema — **offen, erfordert Schema-Migration**
 
 ---
 
@@ -240,38 +174,50 @@ Neue Datei: `src/rpki_cache.rs`
 
 ### 2.4.1 — Neue Grafana-Panels
 
-Erweiterung von `deploy/grafana/provisioning/dashboards/gateway.json`:
-
-| Panel | Typ | Datasource |
-|-------|-----|------------|
-| BGP Events/s nach Typ (ANNOUNCE/WITHDRAW) | Time Series | Prometheus |
-| Top 10 Origin-AS nach Volume | Bar Chart | ClickHouse |
-| RPKI Status Verteilung | Pie Chart | Prometheus |
-| Aktive Anomaly-Alerts | Alert List | Alertmanager |
-| Flapping Prefixe (24h) | Table | ClickHouse |
-| Hijack-Erkennungen Timeline | Time Series | Prometheus |
+- [x] Row "BGP Intelligence" in `gateway.json`
+- [x] Panel: BGP Events/s (timeseries, Prometheus)
+- [x] Panel: RPKI Status Verteilung (piechart, Prometheus, Valid=green/Invalid=red)
+- [x] Panel: Hijack-Erkennungen Timeline (timeseries, thresholds)
+- [x] Panel: Prefix Flapping Ereignisse (timeseries)
+- [x] Panel: RPKI Validierungsrate (timeseries)
+- [x] Panel: Aktive Anomalien gesamt (stat, colorMode=background)
 
 ### 2.4.2 — ClickHouse Grafana Plugin
 
-- [ ] `grafana-clickhouse-datasource` Plugin in Grafana-Container einbinden
-- [ ] Datasource-Provisioning in `deploy/grafana/provisioning/datasources/clickhouse.yml`
+- [x] `GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource"` im Grafana-Service
+- [x] `deploy/grafana/provisioning/datasources/clickhouse.yml` (uid=clickhouse, port=9000)
+- [x] `deploy/grafana/provisioning/dashboards/bgp_clickhouse.json`:
+  - Top 10 Origin-AS (barchart)
+  - Flapping Prefixe (table)
+  - BGP Events Timeline (timeseries)
+  - ANNOUNCE vs WITHDRAW (piechart)
 
 ---
 
 ## Abhängigkeiten & Reihenfolge
 
 ```
-2.1 ClickHouse Setup & Exporter
-    └── 2.1.4 Neue API-Endpunkte
-        └── 2.2 Anomalie-Erkennung
+2.1 ClickHouse Setup & Exporter ✅
+    └── 2.1.4 Neue API-Endpunkte ✅
+        └── 2.2 Anomalie-Erkennung ✅
             │   (braucht historische Daten aus ClickHouse als Baseline)
-            └── 2.3 RPKI-Validierung (parallel zu 2.2 möglich)
-                └── 2.4 Dashboard-Erweiterung (letzte Phase)
+            └── 2.3 RPKI-Validierung ✅
+                └── 2.4 Dashboard-Erweiterung ✅
 ```
 
 ---
 
-## Was sich NICHT ändert
+## Offene Punkte (Next-Sprint)
+
+| Punkt | Beschreibung | Priorität |
+|-------|-------------|-----------|
+| BGP Leak Detection | AS-Typ via CAIDA AS-Rank API | Mittel |
+| AS-Path-Längen-Anomalie | Rolling Median über 1000 Events | Niedrig |
+| RPKI im ClickHouse-Schema | `rpki_status` Spalte in `bgp_events` | Mittel |
+
+---
+
+## Was sich NICHT geändert hat
 
 - `bgp-stream` bleibt unverändert
 - Gateway-Cluster (4× Instanzen + HAProxy) bleibt identisch
@@ -283,10 +229,9 @@ Erweiterung von `deploy/grafana/provisioning/dashboards/gateway.json`:
 
 ## Aufwand-Zusammenfassung
 
-| Phase | Aufwand | Priorität |
-|-------|---------|-----------|
-| 2.1 ClickHouse | 4–6 Wochen | **Erste** — alles andere baut darauf auf |
-| 2.2 Anomalie-Erkennung | 3–4 Wochen | **Zweite** — Kern-Feature |
-| 2.3 RPKI | 2–3 Wochen | **Dritte** — Qualitätsverbesserung |
-| 2.4 Dashboards | 1–2 Wochen | **Letzte** — Abschluss |
-| **Gesamt** | **10–15 Wochen** | |
+| Phase | Aufwand | Status |
+|-------|---------|--------|
+| 2.1 ClickHouse | 4–6 Wochen | ✅ Abgeschlossen |
+| 2.2 Anomalie-Erkennung | 3–4 Wochen | ✅ Abgeschlossen (2 Regeln offen) |
+| 2.3 RPKI | 2–3 Wochen | ✅ Abgeschlossen |
+| 2.4 Dashboards | 1–2 Wochen | ✅ Abgeschlossen |

@@ -67,13 +67,10 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         None
     };
 
-    // Create S3 exporter if enabled
-    let s3_exporter = if config.s3.enabled {
-        // Note: In tests, we won't actually initialize S3
-        None
-    } else {
-        None
-    };
+    // S3 exporter — intentionally not initialized at startup.
+    // S3 uploads are triggered on-demand via POST /api/v1/export/s3.
+    // The handler reads S3 config from AppState directly.
+    let s3_exporter: Option<Arc<S3Exporter>> = None;
 
     // Create ClickHouse exporter if enabled
     let clickhouse_exporter = if config.clickhouse.enabled {

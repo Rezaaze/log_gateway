@@ -94,25 +94,23 @@ impl HijackDetector {
         }
     }
 
-    /// Checks a BGP event for hijacks with RPKI validation.
+    /// Checks a BGP event for hijacks with a pre-fetched RPKI status.
     ///
     /// This is an async enrichment layer that runs after the synchronous check().
-    /// It queries RPKI (Routinator) to adjust confidence based on ROA validity.
-    pub async fn check_with_rpki(
+    /// The caller is responsible for fetching the RPKI status (and recording metrics)
+    /// before calling this method — avoids double-querying Routinator.
+    pub fn check_with_rpki_status(
         &self,
         event: &BgpClickHouseRecord,
-        rpki_cache: &RpkiCache,
+        rpki_status: RpkiStatus,
     ) -> Option<Anomaly> {
         // Skip withdraw events for hijack detection
         if event.event_type == "withdraw" {
             return None;
         }
 
-        // First, run the synchronous check
+        // Run the synchronous check
         let mut anomaly = self.check(event);
-
-        // Get RPKI status
-        let rpki_status = rpki_cache.validate(&event.prefix, event.origin_as).await;
 
         match (anomaly.take(), rpki_status) {
             // Case 1: No anomaly from check() (known AS) but RPKI invalid → Warning
@@ -390,7 +388,8 @@ pub async fn run_rpki_enrichment(
             continue;
         }
 
-        // Validate against RPKI and record metrics
+        // Validate against RPKI once — reuse the result for both metrics and
+        // hijack detection to avoid querying Routinator twice per event.
         let rpki_status = rpki_cache.validate(&record.prefix, record.origin_as).await;
         match &rpki_status {
             RpkiStatus::Valid => metrics.record_rpki_valid(),
@@ -398,12 +397,11 @@ pub async fn run_rpki_enrichment(
             RpkiStatus::NotFound | RpkiStatus::Unavailable => {}
         }
 
-        // Check for hijacks with RPKI validation
-        if let Some(anomaly) = hijack_detector.check_with_rpki(&record, &rpki_cache).await {
+        // Check for hijacks using the already-fetched RPKI status
+        if let Some(anomaly) = hijack_detector.check_with_rpki_status(&record, rpki_status) {
             // Try to send without blocking
             if let Err(e) = alert_tx.try_send(anomaly) {
                 tracing::warn!("Alert channel full, dropping RPKI-enriched anomaly: {}", e);
-                // Drop the anomaly silently
             }
         }
     }

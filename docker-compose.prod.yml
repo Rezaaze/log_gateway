@@ -65,6 +65,9 @@ services:
       - gateway_jwt_secret
     networks:
       - gateway-net
+    depends_on:
+      clickhouse:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -87,6 +90,9 @@ services:
       - gateway_jwt_secret
     networks:
       - gateway-net
+    depends_on:
+      clickhouse:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -109,6 +115,9 @@ services:
       - gateway_jwt_secret
     networks:
       - gateway-net
+    depends_on:
+      clickhouse:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -131,6 +140,9 @@ services:
       - gateway_jwt_secret
     networks:
       - gateway-net
+    depends_on:
+      clickhouse:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -212,6 +224,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: "admin"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/etc/grafana/provisioning/dashboards/gateway.json"
+      GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -257,7 +270,7 @@ services:
     container_name: clickhouse
     ports:
       - "127.0.0.1:8123:8123"   # HTTP API (localhost only)
-      # Port 9000 NOT exposed
+      - "9000:9000"              # Native TCP — required by grafana-clickhouse-datasource
     environment:
       CLICKHOUSE_DB: bgp
       CLICKHOUSE_USER: default

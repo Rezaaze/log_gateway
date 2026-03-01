@@ -71,11 +71,12 @@ impl ClickHouseExporter {
             return;
         }
 
-        // Try to push the record to the queue
-        // If the queue is full, we drop the record silently (no panic, no block)
+        // Try to push the record to the queue.
+        // If the queue is full, increment the flush-error metric so the drop
+        // is visible in Prometheus — no panic, no block.
         if self.buffer.push(record).is_err() {
-            // Queue is full, record is dropped
-            // In production, you might want to increment a metric here
+            self.metrics.record_clickhouse_flush_error();
+            tracing::warn!("ClickHouse buffer full — record dropped");
         }
     }
 
@@ -104,12 +105,17 @@ impl ClickHouseExporter {
 
         let count = records.len();
 
-        // Prepare the INSERT query
+        // Prepare the INSERT query — URL-encode the query string so spaces
+        // and special characters don't break the HTTP request.
         let query = format!(
             "INSERT INTO {}.{} FORMAT JSONEachRow",
             self.config.database, self.config.table
         );
-        let url = format!("{}?query={}", self.config.url, query);
+        let encoded_query = query
+            .replace(' ', "%20")
+            .replace('\n', "%0A")
+            .replace('\t', "%09");
+        let url = format!("{}?query={}", self.config.url, encoded_query);
 
         // Convert records to newline-delimited JSON
         let mut ndjson = String::with_capacity(count * 256); // ~256 bytes per record
