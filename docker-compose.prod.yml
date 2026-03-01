@@ -242,6 +242,9 @@ services:
       SAMPLE_RATE:       "1.0"
       CHANNEL_CAP:       "64000"
       RUST_LOG:          "warn"
+    secrets:
+      - gateway_api_key
+      - gateway_jwt_secret
     network_mode: host                                 # Outbound HTTPS via Host-Stack
     depends_on:
       haproxy:

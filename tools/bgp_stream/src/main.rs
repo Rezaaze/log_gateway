@@ -84,12 +84,26 @@ struct Config {
     channel_cap: usize,
 }
 
+/// Read a secret: env var first, then /run/secrets/<name> file as fallback.
+fn read_secret(env_name: &str, secret_name: &str) -> String {
+    if let Ok(val) = env::var(env_name) {
+        if !val.is_empty() {
+            return val.trim().to_string();
+        }
+    }
+    let path = format!("/run/secrets/{secret_name}");
+    std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 impl Config {
     fn from_env() -> Self {
         Self {
             gateway_url: env::var("GATEWAY_URL").unwrap_or_else(|_| "http://localhost:8090".into()),
-            api_key: env::var("GATEWAY_API_KEY").unwrap_or_default(),
-            jwt_secret: env::var("GATEWAY_JWT_SECRET").unwrap_or_default(),
+            api_key: read_secret("GATEWAY_API_KEY", "gateway_api_key"),
+            jwt_secret: read_secret("GATEWAY_JWT_SECRET", "gateway_jwt_secret"),
             workers: env::var("WORKERS")
                 .ok()
                 .and_then(|v| v.parse().ok())
