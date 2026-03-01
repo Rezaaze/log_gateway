@@ -579,6 +579,12 @@ async fn stats_task(stats: Arc<Stats>, cfg: Arc<Config>, start: Instant, chan_ca
 
 #[tokio::main]
 async fn main() {
+    // Install aws-lc-rs as the process-level rustls CryptoProvider.
+    // Must happen before any TLS connection is attempted.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install rustls CryptoProvider");
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
