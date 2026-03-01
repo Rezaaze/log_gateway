@@ -221,33 +221,32 @@ services:
       - prometheus
     restart: unless-stopped
 
-  # ── Wikipedia Stream — Dauerstresstest mit echten Weltdaten ─────────────────
-  # Abonniert den Wikipedia Recent-Changes SSE-Stream und schickt jeden Edit
-  # als Log-Event ans Gateway. Kostenlos, kein API-Key nötig.
+  # ── BGP Stream (Rust) — RIPE NCC RIS Live → Gateway ────────────────────────
+  # Verbindet sich mit wss://ris-live.ripe.net/v1/ws/, empfängt alle BGP
+  # UPDATE-Events (ANNOUNCE + WITHDRAW) und sendet sie gebündelt ans Gateway.
+  # WICHTIG: /etc/hosts auf dem Host muss enthalten: 193.0.11.16 ris-live.ripe.net
+  #          (extra_hosts funktioniert NICHT mit network_mode: host)
   #
-  # Starten:  docker compose -f docker-compose.prod.yml up -d wikipedia-stream
-  # Stoppen:  docker compose -f docker-compose.prod.yml stop wikipedia-stream
-  # Logs:     docker compose -f docker-compose.prod.yml logs -f wikipedia-stream
-  wikipedia-stream:
-    image: python:3.12-alpine
-    container_name: wikipedia-stream
-    working_dir: /app
-    volumes:
-      - ./tools:/app/tools:ro
+  # Starten:  docker compose -f docker-compose.prod.yml up -d bgp-stream
+  # Stoppen:  docker compose -f docker-compose.prod.yml stop bgp-stream
+  # Logs:     docker compose -f docker-compose.prod.yml logs -f bgp-stream
+  bgp-stream:
+    image: ghcr.io/rezaaze/log_gateway/bgp-stream:latest
+    container_name: bgp-stream
     environment:
-      GATEWAY_URL:      "http://haproxy-lb:8090"  # Über HAProxy → alle 4 Instanzen
-      GATEWAY_API_KEY:  ""                          # Leer = kein Auth
-      WORKERS:          "4"                         # 4 parallele HTTP-Sender
-      TENANT_ID:        "wikipedia"
-    command: python3 tools/wikipedia_stream.py
-    networks:
-      - gateway-net
+      GATEWAY_URL:       "http://127.0.0.1:8090"      # host-network: HAProxy direkt
+      WORKERS:           "8"
+      BATCH_SIZE:        "100"
+      BATCH_TIMEOUT_MS:  "20"
+      TENANT_ID:         "bgp"
+      SAMPLE_RATE:       "1.0"
+      CHANNEL_CAP:       "64000"
+      RUST_LOG:          "warn"
+    network_mode: host                                 # Outbound HTTPS via Host-Stack
     depends_on:
       haproxy:
         condition: service_healthy
     restart: unless-stopped
-    profiles:
-      - stress                                      # Nur mit: --profile stress
 
   # ── Alertmanager ────────────────────────────────────────────────────────────
   alertmanager:

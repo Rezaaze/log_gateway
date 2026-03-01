@@ -10,6 +10,7 @@ Dieses Dokument beschreibt das Projekt vollständig, damit Claude in einer neuen
 **Stack:** Rust 2021 · Tokio async · Axum 0.7 · Prometheus · Grafana · MinIO/S3
 **Pfad:** `/Users/alirezashahsavarkhani/rust_tool/log-gateway`
 **Status:** Alle Milestones + Tasks + P1–P6 abgeschlossen + Performance-Optimierungen #1, #2 & #3 + Hardcore Tests + 4-Zylinder Cluster. **105/105 Tests grün.**
+Python-Streams vollständig durch Rust ersetzt. bgp-stream deployed, Verbindungsfix (rustls ALPN) gepusht — **Verifikation ausstehend (neue Session).**
 
 ---
 
@@ -82,8 +83,13 @@ log-gateway/
 │   ├── property_tests.rs    # 9 Property-based Tests (proptest): 4 cache + 5 redactor Invarianten
 │   └── hardcore_test.rs     # 27 Tests: Chaos(8), Concurrency(3), Security(5), Edge Cases(8), Load(3)
 ├── docker-compose.yml       # Dev-Stack: gateway (8080), prometheus, grafana, minio
-├── docker-compose.prod.yml  # Prod-Cluster: nginx-lb (8090) + 4x gateway (cpuset 0-3) + support services
+├── docker-compose.prod.yml  # Prod-Cluster: haproxy (8090) + 4x gateway (cpuset 0-3) + bgp-stream + support services
 ├── deploy-cluster.sh        # Zero-Downtime Deploy: health-gates, smoke-test, --rollback flag
+├── tools/
+│   └── bgp_stream/
+│       ├── Cargo.toml       # bgp-stream sub-crate (Cargo workspace member)
+│       ├── Dockerfile       # Debian bookworm-slim + binary
+│       └── src/main.rs      # RIPE RIS Live WebSocket → Log Gateway (Rust)
 └── deploy/
     ├── nginx/nginx.conf     # ip_hash upstream, keepalive 64, epoll, 64KB body limit
     └── prometheus.prod.yml  # Scrapt alle 4 Instanzen einzeln mit instance/cpuset Labels
@@ -392,9 +398,30 @@ debug = true           # Volle Debug-Informationen
 
 **Produktions-Deploy (Hetzner 167.235.30.106):**
 - Projektpfad: `/root/log-gateway-src`
-- Kein Git-Repo auf Server — Dateien per `scp` übertragen
+- GitHub Actions deployed automatisch auf Push zu `main` (multi-arch amd64+arm64)
 - Secrets: `/root/log-gateway-src/secrets/*.txt`
 - Deploy: `./deploy-cluster.sh --build`
+
+## bgp-stream (tools/bgp_stream)
+
+Rust-Ersatz für die Python BGP-Stream-Implementierung.
+
+**Funktion:** RIPE NCC RIS Live WebSocket → batched POST → Log Gateway
+**Endpoint:** `wss://ris-live.ripe.net/v1/ws/`
+**Container:** `bgp-stream` in `docker-compose.prod.yml` mit `network_mode: host`
+
+**Kritische Punkte:**
+- `network_mode: host` — nötig, weil Docker bridge NAT ausgehende HTTPS blockiert
+- `extra_hosts` funktioniert NICHT mit `network_mode: host` → stattdessen `/etc/hosts` auf dem Host
+- Server `/etc/hosts` enthält: `193.0.11.16 ris-live.ripe.net` (IPv4 forcieren, kein IPv6)
+- Letzter Fix (Commit `19428f7`): expliziter `rustls::ClientConfig` ohne ALPN als `Connector::Rustls` — verhindert CLOSE-WAIT-Hänger durch falsche ALPN-Aushandlung
+- `connect_async_tls_with_config(..., None)` NICHT verwenden — baut internen Connector ohne CryptoProvider → panic/hang
+
+**Neue Session: Als erstes prüfen:**
+```bash
+ssh root@167.235.30.106 "docker ps | grep bgp && docker logs bgp-stream --tail 30"
+# Erwartetes Ergebnis: "Connected ✓" + nach 10s Stats-Zeile
+```
 
 ## Alert Rules (deploy/alertmanager/alerts.yml)
 
