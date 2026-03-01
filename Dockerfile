@@ -13,13 +13,15 @@ WORKDIR /app
 
 # Copy manifests first — layer cache for dependencies
 COPY Cargo.toml Cargo.lock ./
+COPY tools/bgp_stream/Cargo.toml ./tools/bgp_stream/Cargo.toml
 
-# Dummy main + bench to pre-compile dependencies (benches/ required by Cargo.toml [[bench]])
-RUN mkdir -p src benches && \
+# Dummy sources for all workspace members so cargo can resolve the full dependency graph
+RUN mkdir -p src benches tools/bgp_stream/src && \
     echo 'fn main() {}' > src/main.rs && \
     echo 'fn main() {}' > benches/gateway_benchmarks.rs && \
-    cargo build --release && \
-    rm -rf src benches
+    echo 'fn main() {}' > tools/bgp_stream/src/main.rs && \
+    cargo build --release --package log-gateway && \
+    rm -rf src benches tools/bgp_stream/src
 
 # Copy full source
 COPY src ./src
