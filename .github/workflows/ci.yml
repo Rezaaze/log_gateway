@@ -147,8 +147,7 @@ jobs:
       - name: Build and push bgp-stream image (linux/arm64 native)
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: tools/bgp_stream/Dockerfile
+          context: tools/bgp_stream
           platforms: linux/arm64
           push: true
           tags: ${{ steps.meta-bgp.outputs.tags }}

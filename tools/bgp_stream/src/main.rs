@@ -22,12 +22,35 @@ Env vars (all optional)
 */
 
 use async_channel::{bounded, Receiver, Sender, TrySendError};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use log_gateway::models::{LogEntry, LogLevel};
 use reqwest::{header, Client};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+// ── Local model types (mirrors log-gateway API contract) ──────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LogEntry {
+    #[serde(default = "Uuid::new_v4")]
+    id: Uuid,
+    #[serde(default = "Utc::now")]
+    timestamp: DateTime<Utc>,
+    level: LogLevel,
+    source: String,
+    message: String,
+    metadata: Option<serde_json::Value>,
+}
 use rustls::RootCertStore;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -45,7 +68,6 @@ use tokio_tungstenite::{
     Connector,
 };
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 

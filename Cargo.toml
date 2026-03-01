@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/bgp_stream"]
+members = ["."]
 resolver = "2"
 
 [package]

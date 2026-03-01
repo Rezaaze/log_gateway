@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "bgp-stream"
 version = "0.1.0"
@@ -9,9 +11,6 @@ name = "bgp-stream"
 path = "src/main.rs"
 
 [dependencies]
-# Shared types from the gateway crate
-log-gateway = { path = "../.." }
-
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
@@ -37,20 +36,17 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Async MPMC channel (avoids blocking Tokio threads in sender tasks)
+# Async MPMC channel
 async-channel = "2"
 
-# JWT (shared with gateway)
+# JWT
 jsonwebtoken = "9"
 
 # UUID generation
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
-# Futures utilities (StreamExt, SinkExt — re-exported by tokio-tungstenite)
+# Futures utilities
 futures-util = "0.3"
 
 # Fast random number (sampling)
 fastrand = "2"
-
-
-# [profile.*] is defined in the workspace root Cargo.toml

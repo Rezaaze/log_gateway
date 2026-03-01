@@ -1,4 +1,6 @@
 # ── BGP Stream — Multi-Stage Build ────────────────────────────────────────────
+# Vollständig eigenständig — kein Workspace-Kontext nötig
+# ──────────────────────────────────────────────────────────────────────────────
 FROM rust:1-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,12 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
-COPY tools/bgp_stream/Cargo.toml ./tools/bgp_stream/Cargo.toml
 COPY src/ ./src/
-COPY benches/ ./benches/
-COPY tools/bgp_stream/src/ ./tools/bgp_stream/src/
 
-RUN cargo build --release --locked -p bgp-stream
+RUN cargo build --release --locked
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
