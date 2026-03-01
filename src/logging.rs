@@ -74,7 +74,7 @@ mod tests {
             // try to set a global subscriber which can only be done once.
             // Instead, we test that the environment variable is read correctly
             // and the code path for JSON format doesn't have obvious issues.
-            let log_format = std::env::var("LOG_FORMAT").unwrap();
+            let log_format = std::env::var("LOG_FORMAT").unwrap_or_else(|_| "text".to_string());
             assert_eq!(log_format, "json");
 
             // Test that we can create a JSON subscriber builder without panicking
