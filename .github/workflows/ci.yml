@@ -183,6 +183,7 @@ jobs:
                       /root/log-gateway/deploy/alertmanager \
                       /root/log-gateway/deploy/grafana/provisioning/dashboards \
                       /root/log-gateway/deploy/grafana/provisioning/datasources \
+                      /root/log-gateway/deploy/clickhouse \
                       /root/log-gateway/tools \
                       /root/log-gateway/data/logs \
                       /root/log-gateway/certs \
@@ -229,6 +230,11 @@ jobs:
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             config/default.toml \
             root@167.235.30.106:/root/log-gateway/config/default.toml
+
+          # ClickHouse init.sql
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/clickhouse/init.sql \
+            root@167.235.30.106:/root/log-gateway/deploy/clickhouse/init.sql
 
 
       - name: Deploy cluster via SSH

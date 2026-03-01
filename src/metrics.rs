@@ -8,6 +8,11 @@ pub struct GatewayMetrics {
     cache_misses_total: Arc<prometheus_client::metrics::counter::Counter>,
     bytes_ingested_total: Arc<prometheus_client::metrics::counter::Counter>,
     rate_limit_hits_total: Arc<prometheus_client::metrics::counter::Counter>,
+    clickhouse_flush_errors_total: Arc<prometheus_client::metrics::counter::Counter>,
+    bgp_anomaly_hijack_total: Arc<prometheus_client::metrics::counter::Counter>,
+    bgp_anomaly_flap_total: Arc<prometheus_client::metrics::counter::Counter>,
+    rpki_valid_total: Arc<prometheus_client::metrics::counter::Counter>,
+    rpki_invalid_total: Arc<prometheus_client::metrics::counter::Counter>,
     request_duration_ms: Arc<prometheus_client::metrics::histogram::Histogram>,
     registry: Arc<RwLock<prometheus_client::registry::Registry>>,
 }
@@ -28,6 +33,11 @@ impl GatewayMetrics {
         let cache_misses_total = prometheus_client::metrics::counter::Counter::default();
         let bytes_ingested_total = prometheus_client::metrics::counter::Counter::default();
         let rate_limit_hits_total = prometheus_client::metrics::counter::Counter::default();
+        let clickhouse_flush_errors_total = prometheus_client::metrics::counter::Counter::default();
+        let bgp_anomaly_hijack_total = prometheus_client::metrics::counter::Counter::default();
+        let bgp_anomaly_flap_total = prometheus_client::metrics::counter::Counter::default();
+        let rpki_valid_total = prometheus_client::metrics::counter::Counter::default();
+        let rpki_invalid_total = prometheus_client::metrics::counter::Counter::default();
 
         // Create histogram with linear buckets
         let buckets = vec![
@@ -73,6 +83,36 @@ impl GatewayMetrics {
         );
 
         registry.register(
+            "gateway_clickhouse_flush_errors",
+            "Total number of ClickHouse flush errors.",
+            clickhouse_flush_errors_total.clone(),
+        );
+
+        registry.register(
+            "gateway_bgp_anomaly_hijack",
+            "Total number of possible BGP hijack anomalies detected.",
+            bgp_anomaly_hijack_total.clone(),
+        );
+
+        registry.register(
+            "gateway_bgp_anomaly_flap",
+            "Total number of prefix flapping anomalies detected.",
+            bgp_anomaly_flap_total.clone(),
+        );
+
+        registry.register(
+            "gateway_rpki_valid",
+            "Total number of RPKI-valid BGP announcements.",
+            rpki_valid_total.clone(),
+        );
+
+        registry.register(
+            "gateway_rpki_invalid",
+            "Total number of RPKI-invalid BGP announcements.",
+            rpki_invalid_total.clone(),
+        );
+
+        registry.register(
             "gateway_request_duration_ms",
             "Request processing duration in milliseconds.",
             request_duration_ms.clone(),
@@ -85,6 +125,11 @@ impl GatewayMetrics {
             cache_misses_total: Arc::new(cache_misses_total),
             bytes_ingested_total: Arc::new(bytes_ingested_total),
             rate_limit_hits_total: Arc::new(rate_limit_hits_total),
+            clickhouse_flush_errors_total: Arc::new(clickhouse_flush_errors_total),
+            bgp_anomaly_hijack_total: Arc::new(bgp_anomaly_hijack_total),
+            bgp_anomaly_flap_total: Arc::new(bgp_anomaly_flap_total),
+            rpki_valid_total: Arc::new(rpki_valid_total),
+            rpki_invalid_total: Arc::new(rpki_invalid_total),
             request_duration_ms: Arc::new(request_duration_ms),
             registry: Arc::new(RwLock::new(registry)),
         }
@@ -110,6 +155,10 @@ impl GatewayMetrics {
         self.rate_limit_hits_total.inc();
     }
 
+    pub fn record_clickhouse_flush_error(&self) {
+        self.clickhouse_flush_errors_total.inc();
+    }
+
     pub fn render(&self) -> String {
         let registry_lock = match self.registry.read() {
             Ok(lock) => lock,
@@ -119,5 +168,25 @@ impl GatewayMetrics {
         let mut encoded = String::new();
         prometheus_client::encoding::text::encode(&mut encoded, &registry_lock).unwrap_or_default();
         encoded
+    }
+
+    /// Increments the BGP hijack anomaly counter.
+    pub fn record_bgp_anomaly_hijack(&self) {
+        self.bgp_anomaly_hijack_total.inc();
+    }
+
+    /// Increments the BGP prefix flapping anomaly counter.
+    pub fn record_bgp_anomaly_flap(&self) {
+        self.bgp_anomaly_flap_total.inc();
+    }
+
+    /// Increments the RPKI valid counter.
+    pub fn record_rpki_valid(&self) {
+        self.rpki_valid_total.inc();
+    }
+
+    /// Increments the RPKI invalid counter.
+    pub fn record_rpki_invalid(&self) {
+        self.rpki_invalid_total.inc();
     }
 }

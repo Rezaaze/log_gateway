@@ -92,6 +92,44 @@ impl Default for S3Config {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct ClickHouseConfig {
+    pub enabled: bool,
+    pub url: String,
+    pub database: String,
+    pub table: String,
+    pub batch_size: usize,
+    pub flush_interval_secs: u64,
+}
+
+impl Default for ClickHouseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: "http://clickhouse:8123".to_string(),
+            database: "bgp".to_string(),
+            table: "bgp_events".to_string(),
+            batch_size: 1000,
+            flush_interval_secs: 5,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RpkiConfig {
+    pub enabled: bool,
+    pub routinator_url: String,
+}
+
+impl Default for RpkiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            routinator_url: "http://routinator:8323".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct GatewayConfig {
     pub server: ServerConfig,
     pub cache: CacheConfig,
@@ -100,6 +138,8 @@ pub struct GatewayConfig {
     pub sink: SinkConfig,
     pub rate_limit: RateLimitConfig,
     pub s3: S3Config,
+    pub clickhouse: ClickHouseConfig,
+    pub rpki: RpkiConfig,
     pub tls: TlsConfig,
 }
 

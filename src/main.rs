@@ -150,7 +150,7 @@ async fn main() -> Result<()> {
     }
 
     // Create the app using the library function
-    let app = log_gateway::create_app(config.clone())?;
+    let app = log_gateway::create_app(config.clone()).await?;
 
     if config.tls.enabled {
         info!("TLS enabled — listening on https://{}", addr);

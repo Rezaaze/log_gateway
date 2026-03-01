@@ -12,10 +12,13 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::cache::{CacheEntry, CacheStats, SemanticCache};
+use crate::clickhouse_exporter::{self, ClickHouseExporter};
 use crate::cost_tracker::{CostTracker, GatewayCostSummary};
 use crate::metrics::GatewayMetrics;
 use crate::models::{BatchEntryResult, BatchIngestResponse, IngestResponse, LogEntry, LogLevel};
 use crate::redactor::Redactor;
+use crate::anomaly_detector::AnomalyDetector;
+use crate::bgp_query::ClickHouseQueryClient;
 use crate::s3_exporter::S3Exporter;
 use crate::sink::{SinkRecord, StorageSink};
 use serde::{Deserialize, Serialize};
@@ -44,6 +47,10 @@ pub struct AppState {
     pub metrics: GatewayMetrics,
     pub sink: Option<StorageSink>,
     pub s3_exporter: Option<Arc<S3Exporter>>,
+    pub clickhouse_exporter: Option<Arc<ClickHouseExporter>>,
+    pub bgp_query_client: Option<Arc<ClickHouseQueryClient>>,
+    pub anomaly_detector: Option<Arc<AnomalyDetector>>,
+    pub rpki_tx: Option<tokio::sync::mpsc::Sender<crate::clickhouse_exporter::BgpClickHouseRecord>>,
     pub sink_output_dir: PathBuf,
     pub started_at: std::time::Instant,
     /// API key cached at startup — avoids per-request disk reads of /run/secrets/
@@ -195,6 +202,25 @@ pub async fn ingest_log(
             sink.write(record);
         }
 
+        // Write to ClickHouse exporter if enabled and entry contains BGP metadata
+        if let Some(exporter) = &state.clickhouse_exporter {
+            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+                exporter.write(bgp_record);
+            }
+        }
+
+        // Run anomaly detection if enabled
+        if let Some(detector) = &state.anomaly_detector {
+            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+                detector.check(&bgp_record);
+                
+                // Send to RPKI enrichment if enabled
+                if let Some(rpki_tx) = &state.rpki_tx {
+                    let _ = rpki_tx.try_send(bgp_record);
+                }
+            }
+        }
+
         let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
         state.metrics.record_duration(duration_ms);
         return (StatusCode::ACCEPTED, create_headers(&id), Json(response)).into_response();
@@ -245,6 +271,20 @@ pub async fn ingest_log(
         sink.write(record);
     }
 
+    // Write to ClickHouse exporter if enabled and entry contains BGP metadata
+    if let Some(exporter) = &state.clickhouse_exporter {
+        if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+            exporter.write(bgp_record);
+        }
+    }
+
+    // Run anomaly detection if enabled
+    if let Some(detector) = &state.anomaly_detector {
+        if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+            detector.check(&bgp_record);
+        }
+    }
+
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     state.metrics.record_duration(duration_ms);
     (StatusCode::ACCEPTED, create_headers(&id), Json(response)).into_response()
@@ -281,6 +321,25 @@ fn process_entry(state: &AppState, entry: LogEntry, tenant_id: &str) -> (BatchEn
                 cache_hit: true,
             };
             sink.write(record);
+        }
+
+        // Write to ClickHouse exporter if enabled and entry contains BGP metadata
+        if let Some(exporter) = &state.clickhouse_exporter {
+            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+                exporter.write(bgp_record);
+            }
+        }
+
+        // Run anomaly detection if enabled
+        if let Some(detector) = &state.anomaly_detector {
+            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+                detector.check(&bgp_record);
+                
+                // Send to RPKI enrichment if enabled
+                if let Some(rpki_tx) = &state.rpki_tx {
+                    let _ = rpki_tx.try_send(bgp_record);
+                }
+            }
         }
 
         (
@@ -327,6 +386,20 @@ fn process_entry(state: &AppState, entry: LogEntry, tenant_id: &str) -> (BatchEn
                 cache_hit: false,
             };
             sink.write(record);
+        }
+
+        // Write to ClickHouse exporter if enabled and entry contains BGP metadata
+        if let Some(exporter) = &state.clickhouse_exporter {
+            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+                exporter.write(bgp_record);
+            }
+        }
+
+        // Run anomaly detection if enabled
+        if let Some(detector) = &state.anomaly_detector {
+            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+                detector.check(&bgp_record);
+            }
         }
 
         (
@@ -638,11 +711,24 @@ pub async fn trigger_s3_export(
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(ingest_log, ingest_log_batch, health_check, cache_stats, cost_summary, trigger_s3_export),
+    paths(
+        ingest_log, ingest_log_batch, health_check, cache_stats, cost_summary, trigger_s3_export,
+        crate::bgp_query::bgp_prefix_history,
+        crate::bgp_query::bgp_asn_prefixes,
+        crate::bgp_query::bgp_events,
+        crate::bgp_query::bgp_top_as
+    ),
     components(schemas(
         LogEntry, LogLevel, IngestResponse,
         BatchIngestResponse, BatchEntryResult,
-        HealthResponse, HealthChecks
+        HealthResponse, HealthChecks,
+        crate::bgp_query::PrefixHistoryEntry,
+        crate::bgp_query::AsnPrefixEntry,
+        crate::bgp_query::BgpEventEntry,
+        crate::bgp_query::TopAsEntry,
+        crate::bgp_query::PrefixHistoryParams,
+        crate::bgp_query::BgpEventsParams,
+        crate::bgp_query::TopAsParams
     )),
     modifiers(&SecurityAddon),
     info(
@@ -688,6 +774,10 @@ mod tests {
             metrics: GatewayMetrics::new(),
             sink: None,
             s3_exporter: None,
+            clickhouse_exporter: None,
+            bgp_query_client: None,
+            anomaly_detector: None,
+            rpki_tx: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -726,6 +816,10 @@ mod tests {
             metrics: GatewayMetrics::new(),
             sink: None,
             s3_exporter: None,
+            clickhouse_exporter: None,
+            bgp_query_client: None,
+            anomaly_detector: None,
+            rpki_tx: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -773,6 +867,10 @@ mod tests {
             metrics: GatewayMetrics::new(),
             sink: None,
             s3_exporter: None,
+            clickhouse_exporter: None,
+            bgp_query_client: None,
+            anomaly_detector: None,
+            rpki_tx: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -808,6 +906,10 @@ mod tests {
             metrics: GatewayMetrics::new(),
             sink: None,
             s3_exporter: None,
+            clickhouse_exporter: None,
+            bgp_query_client: None,
+            anomaly_detector: None,
+            rpki_tx: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -854,6 +956,10 @@ mod tests {
             metrics: GatewayMetrics::new(),
             sink: None,
             s3_exporter: None,
+            clickhouse_exporter: None,
+            bgp_query_client: None,
+            anomaly_detector: None,
+            rpki_tx: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -895,6 +1001,10 @@ mod tests {
             metrics: GatewayMetrics::new(),
             sink: None,
             s3_exporter: None,
+            clickhouse_exporter: None,
+            bgp_query_client: None,
+            anomaly_detector: None,
+            rpki_tx: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,

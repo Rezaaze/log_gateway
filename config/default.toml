@@ -33,6 +33,18 @@ access_key_id = ""
 secret_access_key = ""
 delete_after_upload = false
 
+[clickhouse]
+enabled = false
+url = "http://clickhouse:8123"
+database = "bgp"
+table = "bgp_events"
+batch_size = 1000
+flush_interval_secs = 5
+
+[rpki]
+enabled = false
+routinator_url = "http://routinator:8323"
+
 [tls]
 enabled = false
 cert_path = "certs/cert.pem"
