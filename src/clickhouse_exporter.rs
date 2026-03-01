@@ -42,7 +42,7 @@ impl ClickHouseExporter {
     pub fn new(config: ClickHouseConfig, metrics: Arc<GatewayMetrics>) -> Self {
         // Use double the buffer size as headroom to avoid dropping records too early
         let queue_capacity = config.batch_size * 2;
-        
+
         // Create HTTP client with timeout and connection pooling
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
@@ -145,10 +145,7 @@ impl ClickHouseExporter {
                     } else {
                         let status = response.status();
                         let body = response.text().await.unwrap_or_default();
-                        error!(
-                            "ClickHouse flush failed with status {}: {}",
-                            status, body
-                        );
+                        error!("ClickHouse flush failed with status {}: {}", status, body);
                     }
                 }
                 Err(e) => {
@@ -163,7 +160,10 @@ impl ClickHouseExporter {
         }
 
         // All attempts failed
-        error!("All ClickHouse flush attempts failed, dropping {} records", count);
+        error!(
+            "All ClickHouse flush attempts failed, dropping {} records",
+            count
+        );
         // Increment error metric
         self.metrics.record_clickhouse_flush_error();
     }
@@ -209,25 +209,35 @@ pub fn extract_bgp_record(
     source: &str,
 ) -> Option<BgpClickHouseRecord> {
     let metadata = entry.metadata.as_ref()?;
-    
+
     // Try to extract BGP fields from metadata
     let event_type = metadata.get("event_type")?.as_str()?.to_string();
     let prefix = metadata.get("prefix")?.as_str()?.to_string();
-    
+
     // Parse numeric fields with fallbacks
     let origin_as = metadata.get("origin_as")?.as_u64()? as u32;
     let peer_asn = metadata.get("peer_asn")?.as_u64()? as u32;
     let peer_ip = metadata.get("peer_ip")?.as_str()?.to_string();
-    
+
     // Parse arrays with fallbacks
-    let as_path = metadata.get("as_path")
+    let as_path = metadata
+        .get("as_path")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_u64().map(|n| n as u32))
+                .collect()
+        })
         .unwrap_or_default();
-    
-    let community = metadata.get("community")
+
+    let community = metadata
+        .get("community")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     Some(BgpClickHouseRecord {

@@ -33,11 +33,11 @@ impl ClickHouseQueryClient {
     }
 
     /// Execute a query against ClickHouse and deserialize the response
-    pub async fn query<T: serde::de::DeserializeOwned>(
-        &self,
-        sql: &str,
-    ) -> Result<Vec<T>, String> {
-        let url = format!("{}/?database={}&default_format=JSONEachRow", self.url, self.database);
+    pub async fn query<T: serde::de::DeserializeOwned>(&self, sql: &str) -> Result<Vec<T>, String> {
+        let url = format!(
+            "{}/?database={}&default_format=JSONEachRow",
+            self.url, self.database
+        );
 
         let response = self
             .client
@@ -137,7 +137,7 @@ pub struct BgpEventsParams {
 #[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct TopAsParams {
     #[param(minimum = 1, maximum = 100)]
-    pub limit: Option<u32>,  // default 10, max 100
+    pub limit: Option<u32>, // default 10, max 100
 }
 
 /// Validate and sanitize prefix parameter
@@ -150,9 +150,9 @@ fn validate_prefix(prefix: &str) -> Result<String, (StatusCode, String)> {
         .replace("%3a", ":");
 
     // Validate prefix format: only [0-9a-fA-F.:\/] allowed
-    let is_valid = decoded
-        .chars()
-        .all(|c: char| c.is_ascii_digit() || c.is_ascii_hexdigit() || c == '.' || c == ':' || c == '/');
+    let is_valid = decoded.chars().all(|c: char| {
+        c.is_ascii_digit() || c.is_ascii_hexdigit() || c == '.' || c == ':' || c == '/'
+    });
 
     if !is_valid {
         return Err((
@@ -448,7 +448,7 @@ pub async fn bgp_top_as(
 
     // Build SQL query
     let limit = params.limit.unwrap_or(10).min(100);
-    
+
     let sql = format!(
         "SELECT
             origin_as,

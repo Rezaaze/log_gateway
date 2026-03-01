@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 use tracing;
 use uuid::Uuid;
 
-use crate::clickhouse_exporter::BgpClickHouseRecord;
 use crate::bgp_query::ClickHouseQueryClient;
+use crate::clickhouse_exporter::BgpClickHouseRecord;
 use crate::metrics::GatewayMetrics;
 use crate::rpki_cache::{RpkiCache, RpkiStatus};
 
@@ -140,7 +140,9 @@ impl HijackDetector {
                     RpkiStatus::Valid => {
                         // RPKI valid → lower confidence (may be legitimate new origin)
                         anomaly.confidence = 0.3;
-                        anomaly.details.push_str(" (RPKI: Valid — may be legitimate)");
+                        anomaly
+                            .details
+                            .push_str(" (RPKI: Valid — may be legitimate)");
                     }
                     RpkiStatus::InvalidAsn | RpkiStatus::InvalidLength => {
                         // RPKI invalid → higher confidence
@@ -235,7 +237,7 @@ impl Detector for FlappingDetector {
 
     fn check(&self, event: &BgpClickHouseRecord) -> Option<Anomaly> {
         const FLAP_WINDOW_SECS: u64 = 300; // 5-minute window
-        const FLAP_THRESHOLD: usize = 10;  // 10 events = flapping
+        const FLAP_THRESHOLD: usize = 10; // 10 events = flapping
 
         let prefix = &event.prefix;
         let now = Utc::now();
@@ -249,10 +251,7 @@ impl Detector for FlappingDetector {
 
         // Remove timestamps outside the sliding window.
         let cutoff = now - chrono::Duration::seconds(FLAP_WINDOW_SECS as i64);
-        while timestamps
-            .front()
-            .is_some_and(|&ts| ts < cutoff)
-        {
+        while timestamps.front().is_some_and(|&ts| ts < cutoff) {
             timestamps.pop_front();
         }
 
@@ -260,7 +259,9 @@ impl Detector for FlappingDetector {
         if timestamps.len() >= FLAP_THRESHOLD {
             let details = format!(
                 "Prefix {} had {} events in the last {} seconds",
-                prefix, timestamps.len(), FLAP_WINDOW_SECS
+                prefix,
+                timestamps.len(),
+                FLAP_WINDOW_SECS
             );
 
             Some(Anomaly {
@@ -346,10 +347,7 @@ impl AnomalyDetector {
 }
 
 /// Async task that receives anomalies and logs them, incrementing metrics.
-pub async fn run_alert_logger(
-    mut rx: mpsc::Receiver<Anomaly>,
-    metrics: Arc<GatewayMetrics>,
-) {
+pub async fn run_alert_logger(mut rx: mpsc::Receiver<Anomaly>, metrics: Arc<GatewayMetrics>) {
     tracing::info!("Alert logger task started");
 
     while let Some(anomaly) = rx.recv().await {

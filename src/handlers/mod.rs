@@ -11,14 +11,14 @@ use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::anomaly_detector::AnomalyDetector;
+use crate::bgp_query::ClickHouseQueryClient;
 use crate::cache::{CacheEntry, CacheStats, SemanticCache};
 use crate::clickhouse_exporter::{self, ClickHouseExporter};
 use crate::cost_tracker::{CostTracker, GatewayCostSummary};
 use crate::metrics::GatewayMetrics;
 use crate::models::{BatchEntryResult, BatchIngestResponse, IngestResponse, LogEntry, LogLevel};
 use crate::redactor::Redactor;
-use crate::anomaly_detector::AnomalyDetector;
-use crate::bgp_query::ClickHouseQueryClient;
 use crate::s3_exporter::S3Exporter;
 use crate::sink::{SinkRecord, StorageSink};
 use serde::{Deserialize, Serialize};
@@ -204,16 +204,20 @@ pub async fn ingest_log(
 
         // Write to ClickHouse exporter if enabled and entry contains BGP metadata
         if let Some(exporter) = &state.clickhouse_exporter {
-            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+            if let Some(bgp_record) =
+                clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source)
+            {
                 exporter.write(bgp_record);
             }
         }
 
         // Run anomaly detection if enabled
         if let Some(detector) = &state.anomaly_detector {
-            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+            if let Some(bgp_record) =
+                clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source)
+            {
                 detector.check(&bgp_record);
-                
+
                 // Send to RPKI enrichment if enabled
                 if let Some(rpki_tx) = &state.rpki_tx {
                     let _ = rpki_tx.try_send(bgp_record);
@@ -273,14 +277,18 @@ pub async fn ingest_log(
 
     // Write to ClickHouse exporter if enabled and entry contains BGP metadata
     if let Some(exporter) = &state.clickhouse_exporter {
-        if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+        if let Some(bgp_record) =
+            clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source)
+        {
             exporter.write(bgp_record);
         }
     }
 
     // Run anomaly detection if enabled
     if let Some(detector) = &state.anomaly_detector {
-        if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+        if let Some(bgp_record) =
+            clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source)
+        {
             detector.check(&bgp_record);
         }
     }
@@ -325,16 +333,20 @@ fn process_entry(state: &AppState, entry: LogEntry, tenant_id: &str) -> (BatchEn
 
         // Write to ClickHouse exporter if enabled and entry contains BGP metadata
         if let Some(exporter) = &state.clickhouse_exporter {
-            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+            if let Some(bgp_record) =
+                clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source)
+            {
                 exporter.write(bgp_record);
             }
         }
 
         // Run anomaly detection if enabled
         if let Some(detector) = &state.anomaly_detector {
-            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+            if let Some(bgp_record) =
+                clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source)
+            {
                 detector.check(&bgp_record);
-                
+
                 // Send to RPKI enrichment if enabled
                 if let Some(rpki_tx) = &state.rpki_tx {
                     let _ = rpki_tx.try_send(bgp_record);
@@ -390,14 +402,18 @@ fn process_entry(state: &AppState, entry: LogEntry, tenant_id: &str) -> (BatchEn
 
         // Write to ClickHouse exporter if enabled and entry contains BGP metadata
         if let Some(exporter) = &state.clickhouse_exporter {
-            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+            if let Some(bgp_record) =
+                clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source)
+            {
                 exporter.write(bgp_record);
             }
         }
 
         // Run anomaly detection if enabled
         if let Some(detector) = &state.anomaly_detector {
-            if let Some(bgp_record) = clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source) {
+            if let Some(bgp_record) =
+                clickhouse_exporter::extract_bgp_record(&entry, tenant_id, &entry.source)
+            {
                 detector.check(&bgp_record);
             }
         }

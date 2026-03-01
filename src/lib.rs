@@ -77,7 +77,8 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
 
     // Create ClickHouse exporter if enabled
     let clickhouse_exporter = if config.clickhouse.enabled {
-        let exporter = ClickHouseExporter::new(config.clickhouse.clone(), Arc::new(metrics.clone()));
+        let exporter =
+            ClickHouseExporter::new(config.clickhouse.clone(), Arc::new(metrics.clone()));
         let _flush_handle = exporter.start_flush_task();
         // Store the handle somewhere if needed for graceful shutdown
         // For now, we just let it run in the background
@@ -107,7 +108,10 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
 
     // Spawn alert logger task
     let metrics_for_alerts = Arc::new(metrics.clone());
-    tokio::spawn(anomaly_detector::run_alert_logger(alert_rx, metrics_for_alerts));
+    tokio::spawn(anomaly_detector::run_alert_logger(
+        alert_rx,
+        metrics_for_alerts,
+    ));
 
     let anomaly_detector = Some(Arc::new(detector));
 
@@ -121,8 +125,10 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
     };
 
     // Spawn RPKI enrichment task if both RPKI and anomaly detection are enabled
-    let rpki_tx = if let (Some(ref rpki), Some(ref detector_arc)) = (&rpki_cache, &anomaly_detector) {
-        let (rpki_tx, rpki_rx) = tokio::sync::mpsc::channel::<crate::clickhouse_exporter::BgpClickHouseRecord>(2048);
+    let rpki_tx = if let (Some(ref rpki), Some(ref detector_arc)) = (&rpki_cache, &anomaly_detector)
+    {
+        let (rpki_tx, rpki_rx) =
+            tokio::sync::mpsc::channel::<crate::clickhouse_exporter::BgpClickHouseRecord>(2048);
         let hijack = detector_arc.hijack_detector_arc();
         let alert_tx_clone = detector_arc.alert_tx();
         let metrics_for_rpki = Arc::new(metrics.clone());
@@ -263,7 +269,8 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
 
     // Create ClickHouse exporter if enabled for tests
     let clickhouse_exporter = if config.clickhouse.enabled {
-        let exporter = ClickHouseExporter::new(config.clickhouse.clone(), Arc::new(metrics.clone()));
+        let exporter =
+            ClickHouseExporter::new(config.clickhouse.clone(), Arc::new(metrics.clone()));
         let _flush_handle = exporter.start_flush_task();
         Some(Arc::new(exporter))
     } else {
