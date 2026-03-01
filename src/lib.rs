@@ -67,10 +67,32 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         None
     };
 
-    // S3 exporter — intentionally not initialized at startup.
-    // S3 uploads are triggered on-demand via POST /api/v1/export/s3.
-    // The handler reads S3 config from AppState directly.
-    let s3_exporter: Option<Arc<S3Exporter>> = None;
+    let s3_exporter = if config.s3.enabled {
+        let s3_cfg = config.s3.clone();
+        match S3Exporter::new(crate::s3_exporter::S3Config {
+            enabled: s3_cfg.enabled,
+            endpoint_url: s3_cfg.endpoint_url,
+            bucket: s3_cfg.bucket,
+            region: s3_cfg.region,
+            prefix: s3_cfg.prefix,
+            access_key_id: s3_cfg.access_key_id,
+            secret_access_key: s3_cfg.secret_access_key,
+            delete_after_upload: s3_cfg.delete_after_upload,
+        })
+        .await
+        {
+            Ok(exporter) => {
+                tracing::info!("S3 exporter initialized");
+                Some(Arc::new(exporter))
+            }
+            Err(e) => {
+                tracing::warn!("S3 exporter disabled — init failed: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Create ClickHouse exporter if enabled
     let clickhouse_exporter = if config.clickhouse.enabled {
