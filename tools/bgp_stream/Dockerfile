@@ -1,12 +1,6 @@
 # ── BGP Stream — Multi-Stage Build ────────────────────────────────────────────
-# Stage 1: Binary kompilieren (ARM64 native im CI, kein QEMU nötig)
-# Stage 2: Minimales Runtime-Image
-# ──────────────────────────────────────────────────────────────────────────────
 FROM rust:1-slim-bookworm AS builder
 
-WORKDIR /build
-
-# Abhängigkeiten für aws-lc-rs (rustls crypto backend)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         libssl-dev \
@@ -14,12 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         clang \
     && rm -rf /var/lib/apt/lists/*
 
-# Workspace-Dateien kopieren (bgp-stream hängt via path-dep vom workspace ab)
-COPY Cargo.toml Cargo.lock ./
-COPY src/ ./src/
-COPY tools/bgp_stream/ ./tools/bgp_stream/
+WORKDIR /build
 
-# Nur bgp-stream binary bauen
+COPY Cargo.toml Cargo.lock ./
+COPY tools/bgp_stream/Cargo.toml ./tools/bgp_stream/Cargo.toml
+COPY src/ ./src/
+COPY benches/ ./benches/
+COPY tools/bgp_stream/src/ ./tools/bgp_stream/src/
+
 RUN cargo build --release --locked -p bgp-stream
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
