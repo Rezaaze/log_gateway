@@ -6,14 +6,61 @@ route:
   group_wait: 10s
   group_interval: 5m
   repeat_interval: 4h
-  receiver: 'null'   # Kein Slack konfiguriert — Alerts nur in UI sichtbar
+  routes:
+    - match:
+        severity: 'emergency'
+      receiver: 'pagerduty'
+      continue: false
+    - match:
+        severity: 'critical'
+      receiver: 'slack-critical'
+      continue: false
+    - match:
+        severity: 'warning'
+      receiver: 'slack-warnings'
+      continue: false
+    # Fallback route for alerts without severity or other severities
+    - receiver: 'null'
 
 receivers:
   - name: 'null'    # Null receiver: Alerts werden gesammelt aber nicht gesendet
+  
+  - name: 'slack-warnings'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'
+        channel: '#bgp-alerts'
+        title: '{{ template "slack.default.title" . }}'
+        text: '{{ template "slack.default.text" . }}'
+        send_resolved: true
+  
+  - name: 'slack-critical'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'
+        channel: '#bgp-critical'
+        title: '{{ template "slack.default.title" . }}'
+        text: '{{ template "slack.default.text" . }}'
+        send_resolved: true
+  
+  - name: 'pagerduty'
+    pagerduty_configs:
+      - service_key: '<PAGERDUTY_KEY>'
+        description: '{{ template "pagerduty.default.description" . }}'
+        severity: 'critical'
+        send_resolved: true
 
 inhibit_rules:
   - source_match:
       severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+  - source_match:
+      severity: 'emergency'
+    target_match:
+      severity: 'critical'
+    equal: ['alertname', 'instance']
+  - source_match:
+      severity: 'emergency'
     target_match:
       severity: 'warning'
     equal: ['alertname', 'instance']

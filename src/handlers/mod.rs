@@ -57,6 +57,8 @@ pub struct AppState {
     pub api_key: Option<Arc<String>>,
     /// JWT secret cached at startup — avoids per-request disk reads of /run/secrets/
     pub jwt_secret: Option<Arc<String>>,
+    /// Alert manager client for managing alert rules and history
+    pub alert_manager_client: Option<Arc<crate::alert_manager::AlertManagerClient>>,
 }
 
 #[utoipa::path(
@@ -732,7 +734,12 @@ pub async fn trigger_s3_export(
         crate::bgp_query::bgp_prefix_history,
         crate::bgp_query::bgp_asn_prefixes,
         crate::bgp_query::bgp_events,
-        crate::bgp_query::bgp_top_as
+        crate::bgp_query::bgp_top_as,
+        crate::alert_api::list_rules_handler,
+        crate::alert_api::create_rule_handler,
+        crate::alert_api::update_rule_handler,
+        crate::alert_api::delete_rule_handler,
+        crate::alert_api::list_active_alerts_handler
     ),
     components(schemas(
         LogEntry, LogLevel, IngestResponse,
@@ -744,7 +751,12 @@ pub async fn trigger_s3_export(
         crate::bgp_query::TopAsEntry,
         crate::bgp_query::PrefixHistoryParams,
         crate::bgp_query::BgpEventsParams,
-        crate::bgp_query::TopAsParams
+        crate::bgp_query::TopAsParams,
+        crate::alert_manager::AlertRule,
+        crate::alert_manager::AlertRuleCreate,
+        crate::alert_manager::AlertRuleUpdate,
+        crate::alert_manager::AlertHistoryEntry,
+        crate::alert_api::AlertApiError
     )),
     modifiers(&SecurityAddon),
     info(
@@ -798,6 +810,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
+            alert_manager_client: None,
         };
 
         // Build application
@@ -840,6 +853,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
+            alert_manager_client: None,
         };
 
         // Build application
@@ -891,6 +905,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
+            alert_manager_client: None,
         };
 
         // Build application
@@ -930,6 +945,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
+            alert_manager_client: None,
         };
 
         let cost_tracker = app_state.cost_tracker.clone();
@@ -980,6 +996,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
+            alert_manager_client: None,
         };
 
         let cost_tracker = app_state.cost_tracker.clone();
@@ -1025,6 +1042,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
+            alert_manager_client: None,
         };
 
         let app = axum::Router::new()

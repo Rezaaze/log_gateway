@@ -279,6 +279,7 @@ services:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
       - ./deploy/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./deploy/clickhouse/alert_rules_schema.sql:/docker-entrypoint-initdb.d/02_alert_rules.sql:ro
     networks:
       - gateway-net
     healthcheck:

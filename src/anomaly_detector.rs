@@ -345,7 +345,11 @@ impl AnomalyDetector {
 }
 
 /// Async task that receives anomalies and logs them, incrementing metrics.
-pub async fn run_alert_logger(mut rx: mpsc::Receiver<Anomaly>, metrics: Arc<GatewayMetrics>) {
+pub async fn run_alert_logger(
+    mut rx: mpsc::Receiver<Anomaly>,
+    metrics: Arc<GatewayMetrics>,
+    escalation_router: Option<Arc<crate::escalation::EscalationRouter>>,
+) {
     tracing::info!("Alert logger task started");
 
     while let Some(anomaly) = rx.recv().await {
@@ -362,6 +366,11 @@ pub async fn run_alert_logger(mut rx: mpsc::Receiver<Anomaly>, metrics: Arc<Gate
         match anomaly.anomaly_type {
             AnomalyType::PossibleHijack => metrics.record_bgp_anomaly_hijack(),
             AnomalyType::PrefixFlapping => metrics.record_bgp_anomaly_flap(),
+        }
+
+        // Route through escalation router if available
+        if let Some(router) = &escalation_router {
+            router.route(&anomaly).await;
         }
     }
 

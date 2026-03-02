@@ -13,6 +13,12 @@ pub struct GatewayMetrics {
     bgp_anomaly_flap_total: Arc<prometheus_client::metrics::counter::Counter>,
     rpki_valid_total: Arc<prometheus_client::metrics::counter::Counter>,
     rpki_invalid_total: Arc<prometheus_client::metrics::counter::Counter>,
+    escalation_total: Arc<
+        prometheus_client::metrics::family::Family<
+            Vec<(String, String)>,
+            prometheus_client::metrics::counter::Counter,
+        >,
+    >,
     request_duration_ms: Arc<prometheus_client::metrics::histogram::Histogram>,
     registry: Arc<RwLock<prometheus_client::registry::Registry>>,
 }
@@ -38,6 +44,7 @@ impl GatewayMetrics {
         let bgp_anomaly_flap_total = prometheus_client::metrics::counter::Counter::default();
         let rpki_valid_total = prometheus_client::metrics::counter::Counter::default();
         let rpki_invalid_total = prometheus_client::metrics::counter::Counter::default();
+        let escalation_total = prometheus_client::metrics::family::Family::default();
 
         // Create histogram with linear buckets
         let buckets = vec![
@@ -113,6 +120,12 @@ impl GatewayMetrics {
         );
 
         registry.register(
+            "gateway_escalation_total",
+            "Total number of BGP anomaly escalations by level.",
+            escalation_total.clone(),
+        );
+
+        registry.register(
             "gateway_request_duration_ms",
             "Request processing duration in milliseconds.",
             request_duration_ms.clone(),
@@ -130,6 +143,7 @@ impl GatewayMetrics {
             bgp_anomaly_flap_total: Arc::new(bgp_anomaly_flap_total),
             rpki_valid_total: Arc::new(rpki_valid_total),
             rpki_invalid_total: Arc::new(rpki_invalid_total),
+            escalation_total: Arc::new(escalation_total),
             request_duration_ms: Arc::new(request_duration_ms),
             registry: Arc::new(RwLock::new(registry)),
         }
@@ -188,5 +202,11 @@ impl GatewayMetrics {
     /// Increments the RPKI invalid counter.
     pub fn record_rpki_invalid(&self) {
         self.rpki_invalid_total.inc();
+    }
+
+    /// Increments the escalation counter for the given level.
+    pub fn record_escalation(&self, level: &crate::escalation::EscalationLevel) {
+        let labels = vec![("level".to_string(), level.prometheus_label().to_string())];
+        self.escalation_total.get_or_create(&labels).inc();
     }
 }

@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
     middleware as axum_middleware,
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use std::path::PathBuf;
@@ -13,12 +13,15 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+pub mod alert_api;
+pub mod alert_manager;
 pub mod anomaly_detector;
 pub mod bgp_query;
 pub mod cache;
 pub mod clickhouse_exporter;
 pub mod config;
 pub mod cost_tracker;
+pub mod escalation;
 pub mod handlers;
 pub mod hot_reload;
 pub mod logging;
@@ -116,6 +119,16 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         None
     };
 
+    // Create alert manager client if ClickHouse is enabled
+    let alert_manager_client = if config.clickhouse.enabled {
+        Some(Arc::new(crate::alert_manager::AlertManagerClient::new(
+            config.clickhouse.url.clone(),
+            config.clickhouse.database.clone(),
+        )))
+    } else {
+        None
+    };
+
     // Create anomaly detector + alert channel
     let (alert_tx, alert_rx) = tokio::sync::mpsc::channel::<anomaly_detector::Anomaly>(1024);
     let detector = anomaly_detector::AnomalyDetector::new(alert_tx);
@@ -125,14 +138,26 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         detector.hijack_detector().warmup(qclient).await;
     }
 
+    let anomaly_detector = Some(Arc::new(detector));
+
+    // Create escalation router if alert manager and anomaly detector are available
+    let escalation_router =
+        if let (Some(ref am), Some(_)) = (&alert_manager_client, &anomaly_detector) {
+            Some(Arc::new(crate::escalation::EscalationRouter::new(
+                Arc::clone(am),
+                Arc::new(metrics.clone()),
+            )))
+        } else {
+            None
+        };
+
     // Spawn alert logger task
     let metrics_for_alerts = Arc::new(metrics.clone());
     tokio::spawn(anomaly_detector::run_alert_logger(
         alert_rx,
         metrics_for_alerts,
+        escalation_router,
     ));
-
-    let anomaly_detector = Some(Arc::new(detector));
 
     // Create RPKI cache if enabled
     let rpki_cache = if config.rpki.enabled {
@@ -194,6 +219,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         started_at: std::time::Instant::now(),
         api_key,
         jwt_secret,
+        alert_manager_client,
     };
 
     // Build protected routes with auth middleware (secrets come from AppState, no disk reads)
@@ -221,6 +247,21 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         )
         .route("/api/v1/bgp/events", get(bgp_query::bgp_events))
         .route("/api/v1/bgp/stats/top-as", get(bgp_query::bgp_top_as))
+        // Alert API routes
+        .route("/api/v1/alerts/rules", get(alert_api::list_rules_handler))
+        .route("/api/v1/alerts/rules", post(alert_api::create_rule_handler))
+        .route(
+            "/api/v1/alerts/rules/:id",
+            put(alert_api::update_rule_handler),
+        )
+        .route(
+            "/api/v1/alerts/rules/:id",
+            delete(alert_api::delete_rule_handler),
+        )
+        .route(
+            "/api/v1/alerts/active",
+            get(alert_api::list_active_alerts_handler),
+        )
         .route_layer(axum_middleware::from_fn_with_state(
             app_state.clone(),
             middleware::require_jwt,
@@ -312,6 +353,7 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
         started_at: std::time::Instant::now(),
         api_key: None,
         jwt_secret: None,
+        alert_manager_client: None,
     };
 
     // Build protected routes WITHOUT auth middleware for tests
