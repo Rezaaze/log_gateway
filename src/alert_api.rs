@@ -81,6 +81,238 @@ pub async fn list_rules_handler(State(state): State<AppState>) -> impl IntoRespo
     }
 }
 
+/// POST /api/v1/alerts/:id/silence
+#[utoipa::path(
+    post,
+    path = "/api/v1/alerts/{id}/silence",
+    params(
+        ("id" = Uuid, Path, description = "Alert ID")
+    ),
+    request_body = SilenceCreate,
+    responses(
+        (status = 200, description = "Alert silenced", body = Silence),
+        (status = 400, description = "Invalid input or UUID"),
+        (status = 404, description = "Alert not found"),
+        (status = 503, description = "Alert manager disabled"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("api_key" = []), ("bearer_auth" = []))
+)]
+pub async fn silence_alert_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<crate::alert_manager::SilenceCreate>,
+) -> impl IntoResponse {
+    // Parse UUID
+    let alert_id = match Uuid::parse_str(&id) {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(AlertApiError {
+                    error: format!("Invalid UUID: {}", e),
+                    status: "error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Validierung: duration_hours 1–168
+    if input.duration_hours < 1 || input.duration_hours > 168 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(AlertApiError {
+                error: format!(
+                    "Duration must be between 1 and 168 hours, got {}",
+                    input.duration_hours
+                ),
+                status: "error",
+            }),
+        )
+            .into_response();
+    }
+
+    // Validierung: reason nicht leer
+    if input.reason.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(AlertApiError {
+                error: "Reason cannot be empty".to_string(),
+                status: "error",
+            }),
+        )
+            .into_response();
+    }
+
+    let client = match &state.alert_manager_client {
+        Some(client) => client,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AlertApiError {
+                    error: "alert_manager_disabled".to_string(),
+                    status: "error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match client.create_silence(input).await {
+        Ok(silence) => {
+            info!("Created silence for alert {}: {}", alert_id, silence.id);
+            (
+                StatusCode::OK,
+                Json(AlertApiResponse {
+                    data: silence,
+                    status: "ok",
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to create silence for alert {}: {}", alert_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AlertApiError {
+                    error: format!("ClickHouse error: {}", e),
+                    status: "error",
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /api/v1/alerts/silences
+#[utoipa::path(
+    get,
+    path = "/api/v1/alerts/silences",
+    responses(
+        (status = 200, description = "List of active silences", body = [Silence]),
+        (status = 503, description = "Alert manager disabled"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("api_key" = []), ("bearer_auth" = []))
+)]
+pub async fn list_silences_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let client = match &state.alert_manager_client {
+        Some(client) => client,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AlertApiError {
+                    error: "alert_manager_disabled".to_string(),
+                    status: "error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match client.list_silences().await {
+        Ok(silences) => (
+            StatusCode::OK,
+            Json(AlertApiResponse {
+                data: silences,
+                status: "ok",
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to list silences: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AlertApiError {
+                    error: format!("ClickHouse error: {}", e),
+                    status: "error",
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// DELETE /api/v1/alerts/silences/:id
+#[utoipa::path(
+    delete,
+    path = "/api/v1/alerts/silences/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Silence ID")
+    ),
+    responses(
+        (status = 204, description = "Silence expired"),
+        (status = 400, description = "Invalid UUID"),
+        (status = 404, description = "Silence not found"),
+        (status = 503, description = "Alert manager disabled"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("api_key" = []), ("bearer_auth" = []))
+)]
+pub async fn expire_silence_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    // Parse UUID
+    let silence_id = match Uuid::parse_str(&id) {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(AlertApiError {
+                    error: format!("Invalid UUID: {}", e),
+                    status: "error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let client = match &state.alert_manager_client {
+        Some(client) => client,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AlertApiError {
+                    error: "alert_manager_disabled".to_string(),
+                    status: "error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match client.expire_silence(silence_id).await {
+        Ok(()) => {
+            info!("Expired silence: {}", silence_id);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => {
+            if e.to_string().contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(AlertApiError {
+                        error: format!("Silence not found: {}", e),
+                        status: "error",
+                    }),
+                )
+                    .into_response()
+            } else {
+                error!("Failed to expire silence {}: {}", silence_id, e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(AlertApiError {
+                        error: format!("ClickHouse error: {}", e),
+                        status: "error",
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
 /// POST /api/v1/alerts/rules
 #[utoipa::path(
     post,

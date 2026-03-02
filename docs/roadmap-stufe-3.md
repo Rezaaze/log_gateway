@@ -1,8 +1,9 @@
 # Roadmap — Stufe 3: Alert-Engine & RPKI-Vertiefung
 
-> **Status: 🟡 VISIONÄR**
+> **Status: 🔵 IN ARBEIT**
 > Geschätzter Aufwand: 8–12 Wochen solo / 5–7 Wochen im Team
 > Voraussetzung: Stufe 2 abgeschlossen ✅
+> Begonnen: 2026-03
 
 ---
 
@@ -20,66 +21,31 @@ ROA-Zeitreihen.
 **Zeitaufwand:** 3–4 Wochen
 **Voraussetzung:** Stufe 2.2 (Rule-Based Detektoren)
 
-### 3.1.1 — Alert-Konfiguration per API
+### 3.1.1 — Alert-Konfiguration per API ✅
 
-Aktuell: Alerts sind hart kodiert in `alerts.yml`.
-Ziel: Alerts dynamisch über API konfigurierbar.
+- [x] `alert_rules` + `alert_history` Tabellen in ClickHouse (`deploy/clickhouse/alert_rules_schema.sql`)
+- [x] CRUD-API: GET/POST `/alerts/rules`, PUT/DELETE `/alerts/rules/:id`, GET `/alerts/active`
+- [x] `src/alert_manager.rs`: `AlertManagerClient` mit list/create/update/delete/persist/resolve
+- [x] `src/alert_api.rs`: 5 Handler mit utoipa-Annotationen
+- [x] Soft-Delete via `enabled=false`, ReplacingMergeTree für Updates
+- [ ] Dynamisches Laden der Rules zur Laufzeit (Hot-Reload via SIGHUP) — offen
 
-- [ ] Neue Datenbank-Tabelle in ClickHouse:
-  ```sql
-  CREATE TABLE alert_rules (
-      id          UUID DEFAULT generateUUIDv4(),
-      name        String,
-      description String,
-      rule_type   LowCardinality(String),  -- hijack/flap/leak/custom
-      config      String,                  -- JSON-konfigurierter Schwellwert
-      enabled     Bool DEFAULT true,
-      created_at  DateTime DEFAULT now(),
-      updated_at  DateTime DEFAULT now()
-  ) ENGINE = ReplacingMergeTree(updated_at)
-  ORDER BY id;
-  ```
-- [ ] CRUD-API-Endpunkte:
-  ```
-  GET    /api/v1/alerts/rules           # Alle Rules
-  POST   /api/v1/alerts/rules           # Neue Rule anlegen
-  PUT    /api/v1/alerts/rules/:id       # Rule aktualisieren
-  DELETE /api/v1/alerts/rules/:id       # Rule deaktivieren
-  GET    /api/v1/alerts/active          # Aktive Alerts
-  POST   /api/v1/alerts/:id/silence     # Alert stumm schalten
-  ```
-- [ ] Dynamisches Laden der Rules zur Laufzeit (Hot-Reload via SIGHUP)
+### 3.1.2 — Eskalationsstufen ✅
 
-### 3.1.2 — Eskalationsstufen
+- [x] `src/escalation.rs`: `EscalationLevel` (Warning 0.5–0.7 / Critical 0.7–0.9 / Emergency >0.9)
+- [x] `EscalationRouter::route()` mit persist + metrics + tracing
+- [x] `metrics.rs`: `record_escalation()` als Prometheus Family Counter
+- [x] `alertmanager.yml`: 3-stufiges Routing + inhibit_rules (Slack Warning/Critical, PagerDuty Emergency)
+- [x] `run_alert_logger` erweitert mit `escalation_router: Option<Arc<EscalationRouter>>`
+- [ ] Automatische Eskalation wenn Alert nicht acknowledged — offen
 
-- [ ] 3-stufiges Eskalationsmodell:
-  ```
-  Stufe 1 (Warning):  Confidence 0.5–0.7 → Slack #bgp-alerts
-  Stufe 2 (Critical): Confidence 0.7–0.9 → Slack #bgp-critical + E-Mail
-  Stufe 3 (Emergency): Confidence > 0.9 → PagerDuty + alle Kanäle
-  ```
-- [ ] Alertmanager-Routing in `deploy/alertmanager/alertmanager.yml` erweitern
-- [ ] Automatische Eskalation wenn Alert nach T Minuten nicht acknowledged
+### 3.1.3 — Alert-Deduplication & Silence ✅
 
-### 3.1.3 — Alert-Deduplication & Silence
-
-- [ ] Fingerprint-basierte Deduplication (gleicher Prefix + AS → ein Alert)
-- [ ] Silence-API: Alert für X Stunden unterdrücken (Maintenance-Windows)
-- [ ] Alert-History in ClickHouse persistieren:
-  ```sql
-  CREATE TABLE alert_history (
-      id           UUID,
-      rule_id      UUID,
-      alert_type   String,
-      prefix       String,
-      origin_as    UInt32,
-      confidence   Float64,
-      status       LowCardinality(String),  -- firing/resolved/silenced
-      fired_at     DateTime64(3),
-      resolved_at  Nullable(DateTime64(3))
-  ) ENGINE = MergeTree()
-  ORDER BY (fired_at, alert_type);
-  ```
+- [x] `src/alert_dedup.rs`: SHA-256 Fingerprint + `DedupCache` (moka, TTL 30min, max 100k)
+- [x] `alert_silences` Tabelle in ClickHouse (`ORDER BY id`, ReplacingMergeTree)
+- [x] `create_silence`, `list_silences`, `is_silenced`, `expire_silence` in `AlertManagerClient`
+- [x] Silence-API: POST `/alerts/:id/silence`, GET `/alerts/silences`, DELETE `/alerts/silences/:id`
+- [x] Dedup + Silence-Check im `EscalationRouter` vor persist (graceful degradation)
 
 ### 3.1.4 — Webhook-Integration
 

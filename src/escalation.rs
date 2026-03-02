@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tracing;
 
+use crate::alert_dedup::{compute_fingerprint, DedupCache};
 use crate::alert_manager::AlertManagerClient;
 use crate::anomaly_detector::Anomaly;
 use crate::metrics::GatewayMetrics;
@@ -49,6 +50,7 @@ impl EscalationLevel {
 pub struct EscalationRouter {
     alert_manager: Arc<AlertManagerClient>,
     metrics: Arc<GatewayMetrics>,
+    dedup_cache: Arc<DedupCache>,
 }
 
 impl EscalationRouter {
@@ -57,6 +59,7 @@ impl EscalationRouter {
         Self {
             alert_manager,
             metrics,
+            dedup_cache: Arc::new(DedupCache::new()),
         }
     }
 
@@ -64,9 +67,12 @@ impl EscalationRouter {
     ///
     /// 1. Determines escalation level from confidence
     /// 2. If no level (confidence < 0.5), returns early
-    /// 3. Persists alert in ClickHouse (rule_id: None)
-    /// 4. Records escalation metric
-    /// 5. Logs at appropriate tracing level
+    /// 3. Computes fingerprint for deduplication
+    /// 4. Checks if alert is silenced
+    /// 5. Checks if alert is a duplicate (within 30 minutes)
+    /// 6. Persists alert in ClickHouse (rule_id: None)
+    /// 7. Records escalation metric
+    /// 8. Logs at appropriate tracing level
     pub async fn route(&self, anomaly: &Anomaly) {
         // Determine escalation level
         let level = match EscalationLevel::from_confidence(anomaly.confidence) {
@@ -76,6 +82,34 @@ impl EscalationRouter {
                 return;
             }
         };
+
+        // Compute fingerprint for deduplication
+        let alert_type = match anomaly.anomaly_type {
+            crate::anomaly_detector::AnomalyType::PossibleHijack => "hijack",
+            crate::anomaly_detector::AnomalyType::PrefixFlapping => "flap",
+        };
+        let fingerprint = compute_fingerprint(alert_type, &anomaly.prefix, anomaly.origin_as);
+
+        // Check if alert is silenced
+        match self.alert_manager.is_silenced(&fingerprint).await {
+            Ok(true) => {
+                tracing::debug!("Alert silenced: {}", fingerprint);
+                return;
+            }
+            Err(e) => {
+                // Graceful degradation: log warning but continue processing
+                tracing::warn!("Failed to check if alert is silenced: {}", e);
+            }
+            Ok(false) => {
+                // Alert is not silenced, continue processing
+            }
+        }
+
+        // Check if alert is a duplicate (within 30 minutes)
+        if !self.dedup_cache.is_new(&fingerprint) {
+            tracing::debug!("Duplicate alert suppressed: {}", fingerprint);
+            return;
+        }
 
         // Persist alert in ClickHouse
         if let Err(e) = self.alert_manager.persist_alert(anomaly, None).await {
@@ -90,29 +124,32 @@ impl EscalationRouter {
         match level {
             EscalationLevel::Warning => {
                 tracing::warn!(
-                    "BGP anomaly detected (WARNING): {:?} prefix={} origin_as={} confidence={}",
+                    "BGP anomaly detected (WARNING): {:?} prefix={} origin_as={} confidence={} fingerprint={}",
                     anomaly.anomaly_type,
                     anomaly.prefix,
                     anomaly.origin_as,
-                    anomaly.confidence
+                    anomaly.confidence,
+                    fingerprint
                 );
             }
             EscalationLevel::Critical => {
                 tracing::error!(
-                    "BGP anomaly detected (CRITICAL): {:?} prefix={} origin_as={} confidence={}",
+                    "BGP anomaly detected (CRITICAL): {:?} prefix={} origin_as={} confidence={} fingerprint={}",
                     anomaly.anomaly_type,
                     anomaly.prefix,
                     anomaly.origin_as,
-                    anomaly.confidence
+                    anomaly.confidence,
+                    fingerprint
                 );
             }
             EscalationLevel::Emergency => {
                 tracing::error!(
-                    "BGP anomaly detected (EMERGENCY): {:?} prefix={} origin_as={} confidence={}",
+                    "BGP anomaly detected (EMERGENCY): {:?} prefix={} origin_as={} confidence={} fingerprint={}",
                     anomaly.anomaly_type,
                     anomaly.prefix,
                     anomaly.origin_as,
-                    anomaly.confidence
+                    anomaly.confidence,
+                    fingerprint
                 );
                 // Extra log line for emergency alerts
                 tracing::error!("EMERGENCY ALERT: Immediate attention required for BGP anomaly");

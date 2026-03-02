@@ -739,7 +739,10 @@ pub async fn trigger_s3_export(
         crate::alert_api::create_rule_handler,
         crate::alert_api::update_rule_handler,
         crate::alert_api::delete_rule_handler,
-        crate::alert_api::list_active_alerts_handler
+        crate::alert_api::list_active_alerts_handler,
+        crate::alert_api::silence_alert_handler,
+        crate::alert_api::list_silences_handler,
+        crate::alert_api::expire_silence_handler
     ),
     components(schemas(
         LogEntry, LogLevel, IngestResponse,
@@ -756,6 +759,8 @@ pub async fn trigger_s3_export(
         crate::alert_manager::AlertRuleCreate,
         crate::alert_manager::AlertRuleUpdate,
         crate::alert_manager::AlertHistoryEntry,
+        crate::alert_manager::SilenceCreate,
+        crate::alert_manager::Silence,
         crate::alert_api::AlertApiError
     )),
     modifiers(&SecurityAddon),

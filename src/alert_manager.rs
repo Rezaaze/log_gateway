@@ -336,3 +336,175 @@ impl AlertManagerClient {
         )
     }
 }
+
+/// Input for creating a new silence.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SilenceCreate {
+    pub fingerprint: String,
+    pub reason: String,
+    pub silenced_by: String,
+    pub duration_hours: u32, // Wie lange schweigen (1–168 Stunden)
+}
+
+/// A silence entry for suppressing alerts.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct Silence {
+    pub id: Uuid,
+    pub fingerprint: String,
+    pub reason: String,
+    pub silenced_by: String,
+    pub silenced_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub active: bool,
+}
+
+impl AlertManagerClient {
+    /// Creates a new silence for suppressing alerts.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The silence creation parameters
+    ///
+    /// # Returns
+    ///
+    /// The created silence entry
+    pub async fn create_silence(&self, input: SilenceCreate) -> Result<Silence> {
+        // Validierung: duration_hours zwischen 1 und 168
+        if input.duration_hours < 1 || input.duration_hours > 168 {
+            return Err(anyhow::anyhow!(
+                "Duration must be between 1 and 168 hours, got {}",
+                input.duration_hours
+            ));
+        }
+
+        // Validierung: reason nicht leer
+        if input.reason.trim().is_empty() {
+            return Err(anyhow::anyhow!("Reason cannot be empty"));
+        }
+
+        // Berechne expires_at
+        let expires_at = Utc::now() + chrono::Duration::hours(input.duration_hours as i64);
+
+        let sql = format!(
+            "INSERT INTO {}.alert_silences (fingerprint, reason, silenced_by, expires_at) \
+             VALUES ('{}', '{}', '{}', '{}')",
+            self.database,
+            input.fingerprint.replace("'", "''"),
+            input.reason.replace("'", "''"),
+            input.silenced_by.replace("'", "''"),
+            expires_at.format("%Y-%m-%d %H:%M:%S")
+        );
+
+        self.execute(&sql).await?;
+
+        // Get the newly created silence by selecting the latest with this fingerprint
+        let sql = format!(
+            "SELECT * FROM {}.alert_silences WHERE fingerprint = '{}' FINAL ORDER BY silenced_at DESC LIMIT 1",
+            self.database,
+            input.fingerprint.replace("'", "''")
+        );
+
+        let mut silences = self.query_json::<Silence>(&sql).await?;
+        silences.pop().context("Failed to retrieve created silence")
+    }
+
+    /// Lists all active silences (active = true and expires_at > now()).
+    pub async fn list_silences(&self) -> Result<Vec<Silence>> {
+        let sql = format!(
+            "SELECT * FROM {}.alert_silences WHERE active = true AND expires_at > now() FINAL ORDER BY silenced_at DESC",
+            self.database
+        );
+
+        self.query_json::<Silence>(&sql).await
+    }
+
+    /// Checks if a fingerprint is currently silenced.
+    ///
+    /// # Arguments
+    ///
+    /// * `fingerprint` - The fingerprint to check
+    ///
+    /// # Returns
+    ///
+    /// `true` if the fingerprint is silenced, `false` otherwise
+    pub async fn is_silenced(&self, fingerprint: &str) -> Result<bool> {
+        let sql = format!(
+            "SELECT count() as cnt FROM {}.alert_silences WHERE fingerprint = '{}' \
+             AND active = true AND expires_at > now() FINAL",
+            self.database,
+            fingerprint.replace("'", "''")
+        );
+
+        let url = self.build_url(&sql);
+        let response = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .context("ClickHouse request failed")?;
+
+        if !response.status().is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read error body".to_string());
+            return Err(anyhow::anyhow!("ClickHouse error: {}", body));
+        }
+
+        let body = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
+
+        // Parse the count result
+        for line in body.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            // ClickHouse returns JSON like {"cnt": 0} or {"cnt": 1}
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(cnt) = value.get("cnt").and_then(|v| v.as_u64()) {
+                    return Ok(cnt > 0);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Expires a silence by setting active = false.
+    ///
+    /// Uses ClickHouse's ReplacingMergeTree engine: we INSERT a new row with the same ID
+    /// but newer silenced_at and active = false.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The silence ID to expire
+    pub async fn expire_silence(&self, id: Uuid) -> Result<()> {
+        // First, get the existing silence to ensure it exists
+        let sql = format!(
+            "SELECT * FROM {}.alert_silences WHERE id = '{}' FINAL",
+            self.database, id
+        );
+
+        let mut silences = self.query_json::<Silence>(&sql).await?;
+        let existing = silences
+            .pop()
+            .context(format!("Silence with id {} not found", id))?;
+
+        // Insert new row with active = false
+        let sql = format!(
+            "INSERT INTO {}.alert_silences (id, fingerprint, reason, silenced_by, silenced_at, expires_at, active) \
+             VALUES ('{}', '{}', '{}', '{}', '{}', '{}', false)",
+            self.database,
+            id,
+            existing.fingerprint.replace("'", "''"),
+            existing.reason.replace("'", "''"),
+            existing.silenced_by.replace("'", "''"),
+            existing.silenced_at.format("%Y-%m-%d %H:%M:%S"),
+            existing.expires_at.format("%Y-%m-%d %H:%M:%S")
+        );
+
+        self.execute(&sql).await
+    }
+}

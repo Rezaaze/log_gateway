@@ -64,3 +64,22 @@ ALTER TABLE bgp.alert_history ADD INDEX rule_id_idx rule_id TYPE bloom_filter GR
 ALTER TABLE bgp.alert_history ADD INDEX prefix_idx prefix TYPE bloom_filter GRANULARITY 1;
 ALTER TABLE bgp.alert_history ADD INDEX origin_as_idx origin_as TYPE bloom_filter GRANULARITY 1;
 ALTER TABLE bgp.alert_history ADD INDEX status_idx status TYPE set(10) GRANULARITY 1;
+
+-- Silence table for suppressing alerts based on fingerprint
+-- Uses ReplacingMergeTree to handle updates via INSERT with newer silenced_at
+CREATE TABLE IF NOT EXISTS bgp.alert_silences (
+    id          UUID DEFAULT generateUUIDv4(),
+    fingerprint String,
+    reason      String,
+    silenced_by String,
+    silenced_at DateTime DEFAULT now(),
+    expires_at  DateTime,
+    active      Bool DEFAULT true
+) ENGINE = ReplacingMergeTree(silenced_at)
+ORDER BY (id)
+COMMENT 'Silences for suppressing alerts based on fingerprint';
+
+-- Index for efficient silence lookups
+ALTER TABLE bgp.alert_silences ADD INDEX fingerprint_idx fingerprint TYPE bloom_filter GRANULARITY 1;
+ALTER TABLE bgp.alert_silences ADD INDEX active_idx active TYPE set(2) GRANULARITY 1;
+ALTER TABLE bgp.alert_silences ADD INDEX expires_at_idx expires_at TYPE minmax GRANULARITY 1;

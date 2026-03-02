@@ -6,9 +6,9 @@
 |-------|-------|--------|--------|
 | [roadmap-stufe-1.md](./roadmap-stufe-1.md) | 1 | ✅ Abgeschlossen | Ingestion, Storage, BGP-Stream, CI/CD |
 | [roadmap-stufe-2.md](./roadmap-stufe-2.md) | 2 | ✅ Abgeschlossen | ClickHouse, Anomalie-Erkennung, RPKI, Dashboards |
-| [roadmap-stufe-3.md](./roadmap-stufe-3.md) | 3 | 🟡 Visionär | Alert-Engine, ML, Multi-Tenancy |
+| [roadmap-stufe-3.md](./roadmap-stufe-3.md) | 3 | 🔵 In Arbeit (3.1.1–3.1.3 ✅) | Alert-Engine, ML, Multi-Tenancy |
 | [roadmap-stufe-4.md](./roadmap-stufe-4.md) | 4 | 🟠 Langfristig | Multi-Feed, AS-Graph, Öffentliche API |
 
 ## Nächster Schritt
 
-→ Mit **Stufe 3** beginnen.
+→ **Stufe 3 in Arbeit** — Task 3.1.4 (Webhook-Integration)
