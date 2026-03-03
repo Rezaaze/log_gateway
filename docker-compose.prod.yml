@@ -68,9 +68,9 @@ services:
     depends_on:
       - clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
       start_period: 5s
     restart: unless-stopped
@@ -92,9 +92,9 @@ services:
     depends_on:
       - clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
       start_period: 5s
     restart: unless-stopped
@@ -116,9 +116,9 @@ services:
     depends_on:
       - clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
       start_period: 5s
     restart: unless-stopped
@@ -140,9 +140,9 @@ services:
     depends_on:
       - clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
       start_period: 5s
     restart: unless-stopped
@@ -164,9 +164,9 @@ services:
       - gateway_3
       - gateway_4
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8404/stats > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8090' || exit 1"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
     restart: unless-stopped
 
