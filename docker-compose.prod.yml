@@ -270,7 +270,8 @@ services:
     container_name: clickhouse
     ports:
       - "127.0.0.1:8123:8123"   # HTTP API (localhost only)
-      - "9000:9000"              # Native TCP — required by grafana-clickhouse-datasource
+      # Note: Native TCP port 9000 is internal only (not exposed to host)
+      #       Grafana uses HTTP API (port 8123) instead of native protocol
     environment:
       CLICKHOUSE_DB: bgp
       CLICKHOUSE_USER: default
