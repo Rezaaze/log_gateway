@@ -67,12 +67,12 @@ enabled = true
 # X-API-Key = "secret"
 
 [telemetry]
-enabled = true
+enabled = false
 otlp_endpoint = "http://localhost:4317"
 service_name = "log-gateway"
 
 [loki]
-enabled = true
+enabled = false
 endpoint = "http://localhost:3100"
 service_name = "log-gateway"
 
