@@ -66,10 +66,9 @@ services:
     networks:
       - gateway-net
     depends_on:
-      clickhouse:
-        condition: service_healthy
+      - clickhouse
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -91,10 +90,9 @@ services:
     networks:
       - gateway-net
     depends_on:
-      clickhouse:
-        condition: service_healthy
+      - clickhouse
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -116,10 +114,9 @@ services:
     networks:
       - gateway-net
     depends_on:
-      clickhouse:
-        condition: service_healthy
+      - clickhouse
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -141,10 +138,9 @@ services:
     networks:
       - gateway-net
     depends_on:
-      clickhouse:
-        condition: service_healthy
+      - clickhouse
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -163,16 +159,12 @@ services:
     networks:
       - gateway-net
     depends_on:
-      gateway_1:
-        condition: service_healthy
-      gateway_2:
-        condition: service_healthy
-      gateway_3:
-        condition: service_healthy
-      gateway_4:
-        condition: service_healthy
+      - gateway_1
+      - gateway_2
+      - gateway_3
+      - gateway_4
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8404/stats > /dev/null"]
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8404/stats > /dev/null || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
