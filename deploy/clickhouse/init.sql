@@ -4,7 +4,7 @@
 CREATE DATABASE IF NOT EXISTS bgp;
 
 CREATE TABLE IF NOT EXISTS bgp.bgp_events (
-    timestamp   DateTime64(3, 'UTC'),
+    timestamp   DateTime,
     event_type  LowCardinality(String),
     prefix      String,
     origin_as   UInt32,
@@ -20,7 +20,7 @@ ORDER BY (origin_as, prefix, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS bgp.rpki_roa_history (
-    timestamp    DateTime64(3, 'UTC'),
+    timestamp    DateTime,
     prefix       String,
     max_length   UInt8,
     origin_as    UInt32,
