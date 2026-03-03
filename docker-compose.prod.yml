@@ -159,15 +159,20 @@ services:
     networks:
       - gateway-net
     depends_on:
-      - gateway_1
-      - gateway_2
-      - gateway_3
-      - gateway_4
+      gateway_1:
+        condition: service_healthy
+      gateway_2:
+        condition: service_healthy
+      gateway_3:
+        condition: service_healthy
+      gateway_4:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8404/stats || exit 1"]
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # ── MinIO ───────────────────────────────────────────────────────────────────

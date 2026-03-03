@@ -258,20 +258,22 @@ jobs:
             cd /root/log-gateway
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-            # Health-Check: alle 4 Gateway-Instanzen müssen healthy sein (max 60s)
-            for i in $(seq 1 20); do
-              HEALTHY=$(docker ps --filter "health=healthy" --format "{{.Names}}" | grep -c "^gateway_" || true)
-              echo "Health check $i/20: $HEALTHY/4 gateway instances healthy"
-              if [ "$HEALTHY" -ge 4 ]; then
-                echo "All 4 gateway instances healthy — deployment successful!"
+            # Health-Check: alle 4 Gateway-Instanzen und HAProxy müssen healthy sein (max 90s)
+            for i in $(seq 1 30); do
+              GATEWAY_HEALTHY=$(docker ps --filter "health=healthy" --format "{{.Names}}" | grep -c "^gateway_" || true)
+              HAPROXY_HEALTHY=$(docker ps --filter "name=haproxy-lb" --filter "health=healthy" --format "{{.Names}}" | wc -l || true)
+              echo "Health check $i/30: $GATEWAY_HEALTHY/4 gateway instances, $HAPROXY_HEALTHY/1 haproxy healthy"
+              if [ "$GATEWAY_HEALTHY" -ge 4 ] && [ "$HAPROXY_HEALTHY" -eq 1 ]; then
+                echo "All gateway instances and HAProxy healthy — deployment successful!"
                 docker image prune -f --filter "until=24h" 2>/dev/null || true
                 exit 0
               fi
               sleep 3
             done
 
-            echo "Health-Check failed after 60s"
+            echo "Health-Check failed after 90s"
             docker compose -f docker-compose.prod.yml ps
             docker compose -f docker-compose.prod.yml logs --tail 20 gateway_1
+            docker compose -f docker-compose.prod.yml logs --tail 20 haproxy-lb
             exit 1
           ENDSSH
