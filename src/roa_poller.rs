@@ -240,6 +240,7 @@ impl RoaPoller {
         }
 
         let body = json_lines.join("\n");
+        let content_length = body.len();
         let query = format!(
             "INSERT INTO {}.rpki_roa_history FORMAT JSONEachRow",
             self.clickhouse_db
@@ -247,7 +248,13 @@ impl RoaPoller {
         let url = format!("{}?query={}", self.clickhouse_url, query);
 
         tracing::debug!("Writing {} deltas to ClickHouse", deltas.len());
-        let response = self.client.post(&url).body(body).send().await?;
+        let response = self
+            .client
+            .post(&url)
+            .header("Content-Length", content_length.to_string())
+            .body(body)
+            .send()
+            .await?;
 
         let status = response.status();
         if !status.is_success() {

@@ -118,10 +118,13 @@ impl ModelTrainer {
 
         let url = format!("{}/?default_format=JSONEachRow", self.clickhouse_url);
 
+        let body = sql;
+        let content_length = body.len();
         let response = self
             .http
             .post(&url)
-            .body(sql)
+            .header("Content-Length", content_length.to_string())
+            .body(body)
             .send()
             .await
             .context("Failed to send training query to ClickHouse")?;
@@ -266,10 +269,13 @@ impl ModelTrainer {
                 .context("Failed to serialize baseline snapshot rows")?
                 .join("\n");
 
+            let request_body = format!("{}\n{}", sql, body);
+            let content_length = request_body.len();
             let response = self
                 .http
                 .post(&url)
-                .body(format!("{}\n{}", sql, body))
+                .header("Content-Length", content_length.to_string())
+                .body(request_body)
                 .send()
                 .await
                 .context("Failed to send baseline snapshot to ClickHouse")?;
@@ -314,10 +320,13 @@ impl ModelTrainer {
                 .context("Failed to serialize AS knowledge snapshot rows")?
                 .join("\n");
 
+            let request_body = format!("{}\n{}", sql, body);
+            let content_length = request_body.len();
             let response = self
                 .http
                 .post(&url)
-                .body(format!("{}\n{}", sql, body))
+                .header("Content-Length", content_length.to_string())
+                .body(request_body)
                 .send()
                 .await
                 .context("Failed to send AS knowledge snapshot to ClickHouse")?;
@@ -357,10 +366,13 @@ impl ModelTrainer {
         );
         let url = format!("{}/?default_format=JSONEachRow", self.clickhouse_url);
 
+        let body = sql;
+        let content_length = body.len();
         let response = self
             .http
             .post(&url)
-            .body(sql)
+            .header("Content-Length", content_length.to_string())
+            .body(body)
             .send()
             .await
             .context("Failed to send baseline snapshot query to ClickHouse")?;
@@ -417,10 +429,13 @@ impl ModelTrainer {
         );
         let url = format!("{}/?default_format=JSONEachRow", self.clickhouse_url);
 
+        let body = sql;
+        let content_length = body.len();
         let response = self
             .http
             .post(&url)
-            .body(sql)
+            .header("Content-Length", content_length.to_string())
+            .body(body)
             .send()
             .await
             .context("Failed to send AS knowledge snapshot query to ClickHouse")?;

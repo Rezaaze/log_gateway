@@ -277,6 +277,7 @@ impl AlertManagerClient {
         let response = self
             .http
             .post(&url)
+            .body("")
             .send()
             .await
             .context("ClickHouse request failed")?;
@@ -299,6 +300,7 @@ impl AlertManagerClient {
         let response = self
             .http
             .post(&url)
+            .body("")
             .send()
             .await
             .context("ClickHouse request failed")?;
@@ -451,6 +453,7 @@ impl AlertManagerClient {
         let response = self
             .http
             .post(&url)
+            .body("")
             .send()
             .await
             .context("ClickHouse request failed")?;

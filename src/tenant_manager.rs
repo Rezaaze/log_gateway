@@ -247,6 +247,7 @@ impl TenantManagerClient {
         let response = self
             .http
             .post(&url)
+            .body("")
             .send()
             .await
             .context("ClickHouse request failed")?;
@@ -269,6 +270,7 @@ impl TenantManagerClient {
         let response = self
             .http
             .post(&url)
+            .body("")
             .send()
             .await
             .context("ClickHouse request failed")?;

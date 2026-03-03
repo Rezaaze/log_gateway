@@ -39,10 +39,14 @@ impl ClickHouseQueryClient {
             self.url, self.database
         );
 
+        let body = sql.to_string();
+        let content_length = body.len();
+
         let response = self
             .client
             .post(&url)
-            .body(sql.to_string())
+            .header("Content-Length", content_length.to_string())
+            .body(body)
             .send()
             .await
             .map_err(|e| format!("ClickHouse request failed: {}", e))?;

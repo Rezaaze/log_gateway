@@ -143,7 +143,15 @@ impl ClickHouseExporter {
         while attempts < max_attempts {
             attempts += 1;
 
-            match self.client.post(&url).body(ndjson.clone()).send().await {
+            let content_length = ndjson.len();
+            match self
+                .client
+                .post(&url)
+                .header("Content-Length", content_length.to_string())
+                .body(ndjson.clone())
+                .send()
+                .await
+            {
                 Ok(response) => {
                     if response.status().is_success() {
                         info!("Flushed {} BGP records to ClickHouse", count);
