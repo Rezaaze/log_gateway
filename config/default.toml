@@ -34,7 +34,7 @@ secret_access_key = ""
 delete_after_upload = false
 
 [clickhouse]
-enabled = false
+enabled = true
 url = "http://clickhouse:8123"
 database = "bgp"
 table = "bgp_events"
@@ -42,7 +42,7 @@ batch_size = 1000
 flush_interval_secs = 5
 
 [rpki]
-enabled = false
+enabled = true
 routinator_url = "http://routinator:8323"
 
 [tls]
@@ -51,7 +51,7 @@ cert_path = "certs/cert.pem"
 key_path  = "certs/key.pem"
 
 [webhooks]
-enabled = false
+enabled = true
 
 # Slack-Beispiel (auskommentiert):
 # [[webhooks.targets]]
@@ -67,12 +67,12 @@ enabled = false
 # X-API-Key = "secret"
 
 [telemetry]
-enabled = false
+enabled = true
 otlp_endpoint = "http://localhost:4317"
 service_name = "log-gateway"
 
 [loki]
-enabled = false
+enabled = true
 endpoint = "http://localhost:3100"
 service_name = "log-gateway"
 
