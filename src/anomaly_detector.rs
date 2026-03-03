@@ -399,7 +399,7 @@ impl AnomalyDetector {
             if let Some(mut anomaly) = detector.check(event) {
                 // Save rule-based confidence before enhancement
                 let rule_based_confidence = anomaly.confidence;
-                
+
                 // Enhance confidence using multiple features: AS-path length,
                 // prefix length, and AS knowledge
                 let ml_confidence = self.baseline.enhance_confidence(
@@ -456,9 +456,9 @@ async fn check_rules_and_route(
     // Note: In 3.1.1-C we'll add rule_type matching (rule_type vs. AnomalyType)
     for rule in cached_rules {
         // Check tenant filter: rule applies if tenant_id is None (global) or matches current tenant
-        let tenant_matches = rule.tenant_id.is_none() || 
-            rule.tenant_id.as_deref() == current_tenant_id;
-        
+        let tenant_matches =
+            rule.tenant_id.is_none() || rule.tenant_id.as_deref() == current_tenant_id;
+
         if tenant_matches && anomaly.confidence >= rule.threshold {
             tracing::info!(
                 "Anomaly confidence {} meets rule '{}' threshold {} (tenant: {:?})",
@@ -494,8 +494,8 @@ pub async fn run_alert_logger(
     let mut cached_rules: Vec<crate::alert_manager::AlertRule> = vec![];
     if let Some(ref am) = alert_manager {
         match am.list_rules().await {
-            Ok(rules) => { 
-                cached_rules = rules; 
+            Ok(rules) => {
+                cached_rules = rules;
                 tracing::info!("Loaded {} alert rules on startup", cached_rules.len());
             }
             Err(e) => tracing::warn!("Failed to load alert rules on startup: {}", e),
@@ -580,10 +580,15 @@ pub async fn run_rpki_enrichment(
         };
 
         // Check for hijacks using the already-fetched RPKI and IRR status
-        if let Some(anomaly) = hijack_detector.check_with_rpki_status(&record, rpki_status, &irr_status) {
+        if let Some(anomaly) =
+            hijack_detector.check_with_rpki_status(&record, rpki_status, &irr_status)
+        {
             // Try to send without blocking
             if let Err(e) = alert_tx.try_send(anomaly) {
-                tracing::warn!("Alert channel full, dropping RPKI+IRR-enriched anomaly: {}", e);
+                tracing::warn!(
+                    "Alert channel full, dropping RPKI+IRR-enriched anomaly: {}",
+                    e
+                );
             }
         }
     }
@@ -617,15 +622,19 @@ mod tests {
     fn test_check_rpki_invalid_irr_inconsistent_known_as() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
-        
+
         // Simulate known AS by adding it to the detector's state
-        detector.prefix_to_asns.entry("1.2.3.0/24".to_string())
+        detector
+            .prefix_to_asns
+            .entry("1.2.3.0/24".to_string())
             .or_insert_with(HashSet::new)
             .insert(64512);
-        
+
         let rpki_status = RpkiStatus::InvalidAsn;
-        let irr_status = IrrStatus::Inconsistent { irr_asns: vec![64513, 64514] };
-        
+        let irr_status = IrrStatus::Inconsistent {
+            irr_asns: vec![64513, 64514],
+        };
+
         let anomaly = detector.check_with_rpki_status(&event, rpki_status, &irr_status);
         assert!(anomaly.is_some());
         let anomaly = anomaly.unwrap();
@@ -638,10 +647,12 @@ mod tests {
     fn test_check_rpki_invalid_irr_inconsistent_new_as() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
-        
+
         let rpki_status = RpkiStatus::InvalidAsn;
-        let irr_status = IrrStatus::Inconsistent { irr_asns: vec![64513, 64514] };
-        
+        let irr_status = IrrStatus::Inconsistent {
+            irr_asns: vec![64513, 64514],
+        };
+
         let anomaly = detector.check_with_rpki_status(&event, rpki_status, &irr_status);
         assert!(anomaly.is_some());
         let anomaly = anomaly.unwrap();
@@ -654,10 +665,12 @@ mod tests {
     fn test_check_rpki_notfound_irr_inconsistent() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
-        
+
         let rpki_status = RpkiStatus::NotFound;
-        let irr_status = IrrStatus::Inconsistent { irr_asns: vec![64513, 64514] };
-        
+        let irr_status = IrrStatus::Inconsistent {
+            irr_asns: vec![64513, 64514],
+        };
+
         let anomaly = detector.check_with_rpki_status(&event, rpki_status, &irr_status);
         assert!(anomaly.is_some());
         let anomaly = anomaly.unwrap();
@@ -670,10 +683,10 @@ mod tests {
     fn test_check_rpki_notfound_irr_consistent_no_boost() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
-        
+
         let rpki_status = RpkiStatus::NotFound;
         let irr_status = IrrStatus::Consistent;
-        
+
         let anomaly = detector.check_with_rpki_status(&event, rpki_status, &irr_status);
         assert!(anomaly.is_some());
         let anomaly = anomaly.unwrap();
@@ -686,15 +699,17 @@ mod tests {
     fn test_check_rpki_invalid_irr_consistent_known_as() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
-        
+
         // Simulate known AS by adding it to the detector's state
-        detector.prefix_to_asns.entry("1.2.3.0/24".to_string())
+        detector
+            .prefix_to_asns
+            .entry("1.2.3.0/24".to_string())
             .or_insert_with(HashSet::new)
             .insert(64512);
-        
+
         let rpki_status = RpkiStatus::InvalidAsn;
         let irr_status = IrrStatus::Consistent;
-        
+
         let anomaly = detector.check_with_rpki_status(&event, rpki_status, &irr_status);
         assert!(anomaly.is_some());
         let anomaly = anomaly.unwrap();
@@ -707,10 +722,12 @@ mod tests {
     fn test_check_rpki_valid_irr_inconsistent_new_as() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
-        
+
         let rpki_status = RpkiStatus::Valid;
-        let irr_status = IrrStatus::Inconsistent { irr_asns: vec![64513, 64514] };
-        
+        let irr_status = IrrStatus::Inconsistent {
+            irr_asns: vec![64513, 64514],
+        };
+
         let anomaly = detector.check_with_rpki_status(&event, rpki_status, &irr_status);
         assert!(anomaly.is_some());
         let anomaly = anomaly.unwrap();
@@ -723,10 +740,12 @@ mod tests {
     fn test_withdraw_event_returns_none() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "withdraw");
-        
+
         let rpki_status = RpkiStatus::InvalidAsn;
-        let irr_status = IrrStatus::Inconsistent { irr_asns: vec![64513, 64514] };
-        
+        let irr_status = IrrStatus::Inconsistent {
+            irr_asns: vec![64513, 64514],
+        };
+
         let anomaly = detector.check_with_rpki_status(&event, rpki_status, &irr_status);
         assert!(anomaly.is_none());
     }
@@ -742,12 +761,9 @@ mod tests {
 
         // Task starten
         let handle = tokio::spawn(run_alert_logger(
-            rx,
-            metrics,
-            None, // kein EscalationRouter
+            rx, metrics, None, // kein EscalationRouter
             None, // kein AlertManager
-            reload_rx,
-            None, // tenant_id
+            reload_rx, None, // tenant_id
         ));
 
         // Sender droppen → Task beendet sich sauber
@@ -764,12 +780,7 @@ mod tests {
         let (reload_tx, reload_rx) = tokio::sync::watch::channel(());
 
         let handle = tokio::spawn(run_alert_logger(
-            rx,
-            metrics,
-            None,
-            None,
-            reload_rx,
-            None, // tenant_id
+            rx, metrics, None, None, reload_rx, None, // tenant_id
         ));
 
         // Reload-Signal senden — kein AlertManager → warn! aber kein Absturz
@@ -778,7 +789,9 @@ mod tests {
         // Kurz warten, dann Sender droppen
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         drop(tx);
-        handle.await.expect("alert_logger panicked after reload signal");
+        handle
+            .await
+            .expect("alert_logger panicked after reload signal");
     }
 
     #[tokio::test]
@@ -843,8 +856,8 @@ mod tests {
         };
 
         // Rule should match because tenant_id matches
-        let tenant_matches = rule.tenant_id.is_none() || 
-            rule.tenant_id.as_deref() == Some(&anomaly.tenant_id);
+        let tenant_matches =
+            rule.tenant_id.is_none() || rule.tenant_id.as_deref() == Some(&anomaly.tenant_id);
         assert!(tenant_matches);
         assert!(anomaly.confidence >= rule.threshold);
     }
@@ -877,10 +890,10 @@ mod tests {
         };
 
         // Rule should NOT match because tenant_id doesn't match
-        let tenant_matches = rule.tenant_id.is_none() || 
-            rule.tenant_id.as_deref() == Some(&anomaly.tenant_id);
+        let tenant_matches =
+            rule.tenant_id.is_none() || rule.tenant_id.as_deref() == Some(&anomaly.tenant_id);
         assert!(!tenant_matches); // Should be false
-        // Even though confidence is above threshold, tenant doesn't match
+                                  // Even though confidence is above threshold, tenant doesn't match
     }
 
     #[test]
@@ -923,11 +936,11 @@ mod tests {
         };
 
         // Global rule should match both tenants
-        let tenant_matches_t1 = rule.tenant_id.is_none() || 
-            rule.tenant_id.as_deref() == Some(&anomaly_t1.tenant_id);
-        let tenant_matches_t2 = rule.tenant_id.is_none() || 
-            rule.tenant_id.as_deref() == Some(&anomaly_t2.tenant_id);
-        
+        let tenant_matches_t1 =
+            rule.tenant_id.is_none() || rule.tenant_id.as_deref() == Some(&anomaly_t1.tenant_id);
+        let tenant_matches_t2 =
+            rule.tenant_id.is_none() || rule.tenant_id.as_deref() == Some(&anomaly_t2.tenant_id);
+
         assert!(tenant_matches_t1);
         assert!(tenant_matches_t2);
         assert!(anomaly_t1.confidence >= rule.threshold);
@@ -947,14 +960,14 @@ mod tests {
 
         // Serialize to JSON
         let json = serde_json::to_string(&rule_create).expect("Serialization should succeed");
-        
+
         // Deserialize back
-        let deserialized: crate::alert_manager::AlertRuleCreate = 
+        let deserialized: crate::alert_manager::AlertRuleCreate =
             serde_json::from_str(&json).expect("Deserialization should succeed");
-        
+
         assert_eq!(deserialized.name, "Test Rule");
         assert_eq!(deserialized.tenant_id, Some("t1".to_string()));
-        
+
         // Test with None tenant_id (global rule)
         let global_rule_create = crate::alert_manager::AlertRuleCreate {
             name: "Global Rule".to_string(),
@@ -963,11 +976,12 @@ mod tests {
             threshold: 0.7,
             tenant_id: None,
         };
-        
-        let json_global = serde_json::to_string(&global_rule_create).expect("Serialization should succeed");
-        let deserialized_global: crate::alert_manager::AlertRuleCreate = 
+
+        let json_global =
+            serde_json::to_string(&global_rule_create).expect("Serialization should succeed");
+        let deserialized_global: crate::alert_manager::AlertRuleCreate =
             serde_json::from_str(&json_global).expect("Deserialization should succeed");
-        
+
         assert_eq!(deserialized_global.tenant_id, None);
     }
 
@@ -980,7 +994,7 @@ mod tests {
 
         // Create a BGP event with normal AS-path length
         let mut event = make_event("10.0.0.0/8", 64512, "announce");
-        
+
         // First few events with normal AS-path length (2-3 hops)
         for i in 0..10 {
             event.as_path = vec![64512, 64513, 64514 + i % 2]; // 2-3 hops
@@ -995,7 +1009,7 @@ mod tests {
         let anomaly = alert_rx.try_recv();
         assert!(anomaly.is_ok());
         let anomaly = anomaly.unwrap();
-        
+
         // The anomaly should have boosted confidence due to anomalous AS-path length
         // Base confidence is 0.85 for new AS, boosted by 0.1 to 0.95
         assert!(anomaly.confidence >= 0.85);
@@ -1006,21 +1020,21 @@ mod tests {
     fn test_ab_confidence_with_metrics() {
         // Create metrics
         let metrics = Arc::new(crate::metrics::GatewayMetrics::new());
-        
+
         // Create anomaly detector with metrics
         let (alert_tx, mut alert_rx) = mpsc::channel::<Anomaly>(10);
         let detector = AnomalyDetector::with_metrics(alert_tx, Arc::clone(&metrics));
 
         // Create a BGP event that will trigger an anomaly
         let event = make_event("10.0.0.0/8", 64512, "announce");
-        
+
         // Check the event
         detector.check(&event);
 
         // Check if an alert was sent
         let anomaly = alert_rx.try_recv();
         assert!(anomaly.is_ok());
-        
+
         // Metrics should have been recorded (no panic)
         let rendered = metrics.render();
         assert!(rendered.contains("gateway_rule_based_confidence"));
@@ -1035,7 +1049,7 @@ mod tests {
 
         // Create a BGP event that will trigger an anomaly
         let event = make_event("10.0.0.0/8", 64512, "announce");
-        
+
         // Check the event - should not panic even without metrics
         detector.check(&event);
 
@@ -1049,7 +1063,7 @@ mod tests {
         // Test Display implementation for AnomalyType
         let hijack = AnomalyType::PossibleHijack;
         let flapping = AnomalyType::PrefixFlapping;
-        
+
         assert_eq!(hijack.to_string(), "PossibleHijack");
         assert_eq!(flapping.to_string(), "PrefixFlapping");
     }
@@ -1058,21 +1072,21 @@ mod tests {
     fn test_anomaly_detected_called_in_check() {
         // Create metrics
         let metrics = Arc::new(crate::metrics::GatewayMetrics::new());
-        
+
         // Create anomaly detector with metrics
         let (alert_tx, mut alert_rx) = mpsc::channel::<Anomaly>(10);
         let detector = AnomalyDetector::with_metrics(alert_tx, Arc::clone(&metrics));
 
         // Create a BGP event that will trigger an anomaly
         let event = make_event("10.0.0.0/8", 64512, "announce");
-        
+
         // Check the event
         detector.check(&event);
 
         // Check if an alert was sent
         let anomaly = alert_rx.try_recv();
         assert!(anomaly.is_ok());
-        
+
         // Check that metrics were recorded
         let rendered = metrics.render();
         assert!(rendered.contains("gateway_anomalies_total"));

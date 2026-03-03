@@ -683,13 +683,13 @@ pub async fn resolve_alert_handler(
     match client.resolve_alert(alert_id).await {
         Ok(()) => {
             info!("Alert resolved: {}", alert_id);
-            
+
             // Record false positive metric
             // Note: In a real implementation, we would need to fetch the alert
             // from ClickHouse to get its anomaly_type. For now, we use "unknown"
             // as specified in the task description.
             state.metrics.record_false_positive("unknown");
-            
+
             (
                 StatusCode::OK,
                 Json(AlertApiResponse {

@@ -18,7 +18,11 @@ pub fn build_loki_layer(
     let url = match Url::parse(endpoint) {
         Ok(url) => url,
         Err(e) => {
-            tracing::warn!("Invalid Loki endpoint '{}': {}. Loki logging disabled.", endpoint, e);
+            tracing::warn!(
+                "Invalid Loki endpoint '{}': {}. Loki logging disabled.",
+                endpoint,
+                e
+            );
             return Ok(None);
         }
     };
@@ -27,14 +31,13 @@ pub fn build_loki_layer(
     let labels = build_loki_labels(service_name);
 
     // Erstelle den Loki Layer
-    let mut builder = tracing_loki::builder()
-        .label("service", service_name)?;
-    
+    let mut builder = tracing_loki::builder().label("service", service_name)?;
+
     // Add additional labels
     for (key, value) in labels {
         builder = builder.label(&key, &value)?;
     }
-    
+
     let (layer, background_task) = builder
         .build_url(url)
         .context("Failed to build Loki layer")?;
@@ -49,8 +52,7 @@ fn build_loki_labels(_service_name: &str) -> HashMap<String, String> {
     let mut labels = HashMap::new();
 
     // Environment label
-    let environment = std::env::var("RUST_ENV")
-        .unwrap_or_else(|_| "production".to_string());
+    let environment = std::env::var("RUST_ENV").unwrap_or_else(|_| "production".to_string());
     labels.insert("environment".to_string(), environment);
 
     // Version label

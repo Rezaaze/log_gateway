@@ -200,11 +200,14 @@ pub async fn ingest_log(
         // No tenant manager, use default
         1000
     };
-    
+
     // Generate a deterministic UUID from tenant_id string for quota tracking
     let tenant_uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, tenant_id.as_bytes());
-    
-    match state.quota_manager.check_and_increment(tenant_uuid, rate_limit) {
+
+    match state
+        .quota_manager
+        .check_and_increment(tenant_uuid, rate_limit)
+    {
         crate::quota_manager::QuotaResult::Exceeded => {
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
             state.metrics.record_duration(duration_ms);
@@ -633,11 +636,14 @@ pub async fn ingest_log_batch(
         // No tenant manager, use default
         1000
     };
-    
+
     // Generate a deterministic UUID from tenant_id string for quota tracking
     let tenant_uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, tenant_id.as_bytes());
-    
-    match state.quota_manager.check_and_increment(tenant_uuid, rate_limit) {
+
+    match state
+        .quota_manager
+        .check_and_increment(tenant_uuid, rate_limit)
+    {
         crate::quota_manager::QuotaResult::Exceeded => {
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
             state.metrics.record_duration(duration_ms);

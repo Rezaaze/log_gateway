@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS bgp.alert_history (
     origin_as   UInt32,
     confidence  Float64,
     status      LowCardinality(String) DEFAULT 'fired',
-    fired_at    DateTime64(3) DEFAULT now64(3),
-    resolved_at Nullable(DateTime64(3))
+    fired_at    DateTime DEFAULT now(),
+    resolved_at Nullable(DateTime)
 ) ENGINE = MergeTree()
 ORDER BY (fired_at, alert_type)
 TTL fired_at + INTERVAL 180 DAY

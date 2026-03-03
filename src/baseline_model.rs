@@ -303,10 +303,7 @@ impl AsKnowledgeTracker {
     ///
     /// Returns 0 if the AS has never been recorded.
     pub fn days_seen(&self, asn: u32) -> usize {
-        self.as_to_days
-            .get(&asn)
-            .map(|set| set.len())
-            .unwrap_or(0)
+        self.as_to_days.get(&asn).map(|set| set.len()).unwrap_or(0)
     }
 
     /// Checks if an AS is "well-known" (seen on at least 7 different days).
@@ -437,7 +434,10 @@ mod tests {
         assert_eq!(extract_prefix_length("10.0.0.0/8"), Some(8));
         assert_eq!(extract_prefix_length("192.168.1.0/24"), Some(24));
         assert_eq!(extract_prefix_length("2001:db8::/32"), Some(32));
-        assert_eq!(extract_prefix_length("2001:db8:85a3::8a2e:370:7334/64"), Some(64));
+        assert_eq!(
+            extract_prefix_length("2001:db8:85a3::8a2e:370:7334/64"),
+            Some(64)
+        );
         assert_eq!(extract_prefix_length("invalid"), None);
         assert_eq!(extract_prefix_length("10.0.0.0/"), None);
         assert_eq!(extract_prefix_length("10.0.0.0/256"), None); // u8 max is 255
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn test_compute_confidence_boost_as_path_anomaly() {
         let model = BaselineModel::new(0.1);
-        
+
         // Train model with normal AS-path lengths (add some variance)
         for i in 0..10 {
             model.update("10.0.0.0/8", 5.0 + (i % 3) as f64 * 0.1); // Values: 5.0, 5.1, 5.2, 5.0, 5.1, ...
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn test_compute_confidence_boost_unusual_prefix() {
         let model = BaselineModel::new(0.1);
-        
+
         // Unusual prefix length (/30 is too specific for IPv4)
         let boost = model.compute_confidence_boost("10.0.0.0/30", 5.0, 64512);
         assert_eq!(boost, 0.05);
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn test_compute_confidence_boost_well_known_as() {
         let model = BaselineModel::new(0.1);
-        
+
         // Make AS well-known by recording it on 7+ days
         for i in 1..=7 {
             model.record_as_seen(64512, &format!("2024-01-{:02}", i));
@@ -609,7 +609,11 @@ mod tests {
         // Test combined: anomalous AS-path (+0.1) + unusual prefix (+0.05) + well-known AS (-0.1) = +0.05
         // Use an extreme value (100.0) to ensure it's detected as anomalous
         let boost = model.compute_confidence_boost("10.0.0.0/30", 100.0, 64512);
-        assert!((boost - 0.05).abs() < 1e-10, "expected ~0.05, got {}", boost);
+        assert!(
+            (boost - 0.05).abs() < 1e-10,
+            "expected ~0.05, got {}",
+            boost
+        );
 
         // Test with cap: anomalous (+0.1) + unusual (+0.05) = +0.15 (capped)
         let model2 = BaselineModel::new(0.1);
@@ -617,13 +621,17 @@ mod tests {
             model2.update("10.0.0.0/30", 5.0); // Consistent values on same prefix
         }
         let boost_capped = model2.compute_confidence_boost("10.0.0.0/30", 100.0, 64513);
-        assert!((boost_capped - 0.15).abs() < 1e-10, "expected ~0.15, got {}", boost_capped);
+        assert!(
+            (boost_capped - 0.15).abs() < 1e-10,
+            "expected ~0.15, got {}",
+            boost_capped
+        );
     }
 
     #[test]
     fn test_enhance_confidence() {
         let model = BaselineModel::new(0.1);
-        
+
         // Train model
         for _ in 0..10 {
             model.update("10.0.0.0/8", 5.0);
@@ -650,7 +658,7 @@ mod tests {
     fn test_as_knowledge_accessor() {
         let model = BaselineModel::new(0.1);
         let tracker = model.as_knowledge();
-        
+
         // Should be able to use tracker methods
         assert_eq!(tracker.days_seen(64512), 0);
         assert!(!tracker.is_well_known(64512));

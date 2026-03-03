@@ -339,7 +339,7 @@ mod tests {
     // Helper function to create a test alert
     fn create_test_alert(id: Uuid, confidence: f64, hours_ago: i64) -> AlertHistoryEntry {
         let fired_at = Utc::now() - Duration::hours(hours_ago);
-        
+
         AlertHistoryEntry {
             id,
             rule_id: Uuid::new_v4(),
@@ -358,14 +358,14 @@ mod tests {
         // Test the confidence bump logic directly
         let new_confidence = f64::min(0.6 + 0.15, 0.95);
         assert_eq!(new_confidence, 0.75);
-        
+
         // Create an alert with confidence 0.6 that's 6 hours old (should be escalated)
         let alert_id = Uuid::new_v4();
         let old_alert = create_test_alert(alert_id, 0.6, 6);
-        
+
         // Test that alerts with confidence < 0.9 are eligible for escalation
         assert!(old_alert.confidence < 0.9);
-        
+
         // Test age calculation (6 hours = 21600 seconds > 300 seconds timeout)
         let age = Utc::now() - old_alert.fired_at;
         let age_secs = age.num_seconds() as u64;
@@ -378,11 +378,11 @@ mod tests {
         let confidence_85 = 0.85;
         let bumped = f64::min(confidence_85 + 0.15, 0.95);
         assert_eq!(bumped, 0.95); // Not 1.0
-        
+
         let confidence_90 = 0.90;
         let bumped = f64::min(confidence_90 + 0.15, 0.95);
         assert_eq!(bumped, 0.95); // Capped at 0.95
-        
+
         let confidence_82 = 0.82;
         let bumped = f64::min(confidence_82 + 0.15, 0.95);
         assert_eq!(bumped, 0.95); // 0.82 + 0.15 = 0.97, but min(0.97, 0.95) = 0.95
@@ -393,15 +393,15 @@ mod tests {
         // Create an alert with confidence 0.92 (emergency level) that's 6 hours old
         let alert_id = Uuid::new_v4();
         let emergency_alert = create_test_alert(alert_id, 0.92, 6);
-        
+
         // Emergency alerts (confidence >= 0.9) should not be escalated
         assert!(emergency_alert.confidence >= 0.9);
-        
+
         // Even though it's old, it shouldn't be escalated
         let age = Utc::now() - emergency_alert.fired_at;
         let age_secs = age.num_seconds() as u64;
         assert!(age_secs >= 300); // It's old enough
-        
+
         // But confidence >= 0.9, so it should be skipped
         // This is tested by the condition: `alert.confidence < 0.9`
     }
@@ -410,7 +410,7 @@ mod tests {
     fn test_escalation_config_default() {
         // This test is in config.rs, but we can verify the logic here
         use crate::config::EscalationConfig;
-        
+
         let config = EscalationConfig::default();
         assert!(config.auto_escalation_enabled);
         assert_eq!(config.check_interval_secs, 60);

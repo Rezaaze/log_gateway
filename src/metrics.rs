@@ -97,20 +97,24 @@ impl GatewayMetrics {
         let quota_warning_total = prometheus_client::metrics::family::Family::default();
         let requests_5xx_total = prometheus_client::metrics::counter::Counter::default();
         let gateway_up = prometheus_client::metrics::gauge::Gauge::default();
-        
+
         // Create histogram buckets for confidence scores [0.1, 0.2, ..., 1.0]
         const CONFIDENCE_BUCKETS: [f64; 10] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
         let rule_based_confidence = prometheus_client::metrics::family::Family::<
             Vec<(String, String)>,
             prometheus_client::metrics::histogram::Histogram,
         >::new_with_constructor(|| {
-            prometheus_client::metrics::histogram::Histogram::new(CONFIDENCE_BUCKETS.iter().copied())
+            prometheus_client::metrics::histogram::Histogram::new(
+                CONFIDENCE_BUCKETS.iter().copied(),
+            )
         });
         let ml_enhanced_confidence = prometheus_client::metrics::family::Family::<
             Vec<(String, String)>,
             prometheus_client::metrics::histogram::Histogram,
         >::new_with_constructor(|| {
-            prometheus_client::metrics::histogram::Histogram::new(CONFIDENCE_BUCKETS.iter().copied())
+            prometheus_client::metrics::histogram::Histogram::new(
+                CONFIDENCE_BUCKETS.iter().copied(),
+            )
         });
 
         // Create counters for anomaly tracking
@@ -388,11 +392,11 @@ impl GatewayMetrics {
     /// * `ml_enhanced` - ML-enhanced confidence score (0.0 to 1.0)
     pub fn record_ab_confidence(&self, anomaly_type: &str, rule_based: f64, ml_enhanced: f64) {
         let labels = vec![("anomaly_type".to_string(), anomaly_type.to_string())];
-        
+
         // Create histograms with confidence buckets if they don't exist yet
         let rule_histogram = self.rule_based_confidence.get_or_create(&labels);
         let ml_histogram = self.ml_enhanced_confidence.get_or_create(&labels);
-        
+
         // Observe the confidence scores
         rule_histogram.observe(rule_based);
         ml_histogram.observe(ml_enhanced);
@@ -426,34 +430,46 @@ mod tests {
     #[test]
     fn test_record_5xx_increments_counter() {
         let metrics = GatewayMetrics::new();
-        
+
         // Initially should be 0 - check that metric appears in output
         let rendered = metrics.render();
         assert!(rendered.contains("gateway_5xx_total"));
-        
+
         // Call record_5xx once and check value increased
         metrics.record_5xx();
         let rendered = metrics.render();
         // The exact format might vary, but we can check it's not 0
         // by verifying the line contains the metric name
-        let lines: Vec<&str> = rendered.lines().filter(|l| l.contains("gateway_5xx_total")).collect();
-        assert!(!lines.is_empty(), "gateway_5xx_total should appear in metrics output");
-        
+        let lines: Vec<&str> = rendered
+            .lines()
+            .filter(|l| l.contains("gateway_5xx_total"))
+            .collect();
+        assert!(
+            !lines.is_empty(),
+            "gateway_5xx_total should appear in metrics output"
+        );
+
         // Call record_5xx again
         metrics.record_5xx();
         let rendered = metrics.render();
-        let lines: Vec<&str> = rendered.lines().filter(|l| l.contains("gateway_5xx_total")).collect();
-        assert!(!lines.is_empty(), "gateway_5xx_total should appear in metrics output after second increment");
+        let lines: Vec<&str> = rendered
+            .lines()
+            .filter(|l| l.contains("gateway_5xx_total"))
+            .collect();
+        assert!(
+            !lines.is_empty(),
+            "gateway_5xx_total should appear in metrics output after second increment"
+        );
     }
 
     #[test]
     fn test_record_gateway_up_sets_gauge() {
         let metrics = GatewayMetrics::new();
-        
+
         // Initially should be 0 (not set yet)
         let rendered = metrics.render();
         assert!(rendered.contains("gateway_up 0"));
-        
+
         // Call record_gateway_up
         metrics.record_gateway_up();
         let rendered = metrics.render();
@@ -463,7 +479,7 @@ mod tests {
     #[test]
     fn test_gateway_up_initial_zero() {
         let metrics = GatewayMetrics::new();
-        
+
         // Before calling record_gateway_up, gauge should be 0
         let rendered = metrics.render();
         assert!(rendered.contains("gateway_up 0"));
@@ -474,13 +490,13 @@ mod tests {
         let metrics = GatewayMetrics::new();
         metrics.record_gateway_up();
         metrics.record_5xx();
-        
+
         let rendered = metrics.render();
-        
+
         // Check that both new metrics appear in the output
         assert!(rendered.contains("gateway_5xx_total"));
         assert!(rendered.contains("gateway_up"));
-        
+
         // Check descriptions
         assert!(rendered.contains("Total number of 5xx responses"));
         assert!(rendered.contains("1 if gateway is running, 0 otherwise"));
@@ -489,18 +505,18 @@ mod tests {
     #[test]
     fn test_record_ab_confidence_both_histograms() {
         let metrics = GatewayMetrics::new();
-        
+
         // Record confidence scores for different anomaly types
         metrics.record_ab_confidence("PossibleHijack", 0.85, 0.92);
         metrics.record_ab_confidence("PrefixFlapping", 0.75, 0.88);
-        
+
         // Should not panic
         let rendered = metrics.render();
-        
+
         // Check that both metrics appear in the output
         assert!(rendered.contains("gateway_rule_based_confidence"));
         assert!(rendered.contains("gateway_ml_enhanced_confidence"));
-        
+
         // Check descriptions
         assert!(rendered.contains("Rule-based confidence score at anomaly detection"));
         assert!(rendered.contains("ML-enhanced confidence score at anomaly detection"));
@@ -509,23 +525,23 @@ mod tests {
     #[test]
     fn test_record_anomaly_detected_increments_counter() {
         let metrics = GatewayMetrics::new();
-        
+
         // Initially should be 0
         let rendered = metrics.render();
         assert!(rendered.contains("gateway_anomalies_total"));
-        
+
         // Record anomaly detection
         metrics.record_anomaly_detected("PossibleHijack");
         metrics.record_anomaly_detected("PrefixFlapping");
         metrics.record_anomaly_detected("PossibleHijack"); // Same type again
-        
+
         let rendered = metrics.render();
-        
+
         // Check that metric appears in output
         assert!(rendered.contains("gateway_anomalies_total"));
         assert!(rendered.contains("anomaly_type=\"PossibleHijack\""));
         assert!(rendered.contains("anomaly_type=\"PrefixFlapping\""));
-        
+
         // Check description
         assert!(rendered.contains("Total number of anomalies detected"));
     }
@@ -533,23 +549,23 @@ mod tests {
     #[test]
     fn test_record_false_positive_increments_counter() {
         let metrics = GatewayMetrics::new();
-        
+
         // Initially should be 0
         let rendered = metrics.render();
         assert!(rendered.contains("gateway_false_positives_total"));
-        
+
         // Record false positives
         metrics.record_false_positive("PossibleHijack");
         metrics.record_false_positive("PrefixFlapping");
         metrics.record_false_positive("PossibleHijack"); // Same type again
-        
+
         let rendered = metrics.render();
-        
+
         // Check that metric appears in output
         assert!(rendered.contains("gateway_false_positives_total"));
         assert!(rendered.contains("anomaly_type=\"PossibleHijack\""));
         assert!(rendered.contains("anomaly_type=\"PrefixFlapping\""));
-        
+
         // Check description
         assert!(rendered.contains("Total number of alerts manually resolved as false positives"));
     }
@@ -557,36 +573,44 @@ mod tests {
     #[test]
     fn test_false_positive_metrics_in_prometheus_output() {
         let metrics = GatewayMetrics::new();
-        
+
         // Record some anomalies and false positives
         metrics.record_anomaly_detected("PossibleHijack");
         metrics.record_anomaly_detected("PrefixFlapping");
         metrics.record_false_positive("PossibleHijack");
-        
+
         let rendered = metrics.render();
-        
+
         // Check that both metrics appear in the output
         assert!(rendered.contains("gateway_anomalies_total"));
         assert!(rendered.contains("gateway_false_positives_total"));
-        
+
         // Check that they have the correct labels
         let lines: Vec<&str> = rendered.lines().collect();
-        let anomalies_lines: Vec<&str> = lines.iter()
+        let anomalies_lines: Vec<&str> = lines
+            .iter()
             .filter(|l| l.contains("gateway_anomalies_total"))
             .copied()
             .collect();
-        let false_positives_lines: Vec<&str> = lines.iter()
+        let false_positives_lines: Vec<&str> = lines
+            .iter()
             .filter(|l| l.contains("gateway_false_positives_total"))
             .copied()
             .collect();
-        
-        assert!(!anomalies_lines.is_empty(), "gateway_anomalies_total should appear in metrics output");
-        assert!(!false_positives_lines.is_empty(), "gateway_false_positives_total should appear in metrics output");
-        
+
+        assert!(
+            !anomalies_lines.is_empty(),
+            "gateway_anomalies_total should appear in metrics output"
+        );
+        assert!(
+            !false_positives_lines.is_empty(),
+            "gateway_false_positives_total should appear in metrics output"
+        );
+
         // Check that we have lines with both anomaly types
         let has_possible_hijack = anomalies_lines.iter().any(|l| l.contains("PossibleHijack"));
         let has_prefix_flapping = anomalies_lines.iter().any(|l| l.contains("PrefixFlapping"));
-        
+
         assert!(has_possible_hijack, "Should have PossibleHijack label");
         assert!(has_prefix_flapping, "Should have PrefixFlapping label");
     }

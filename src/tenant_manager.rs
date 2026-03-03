@@ -12,9 +12,9 @@ use uuid::Uuid;
 pub struct Tenant {
     pub id: Uuid,
     pub name: String,
-    pub api_key_hash: String, // SHA-256 hex des API-Keys
+    pub api_key_hash: String,    // SHA-256 hex des API-Keys
     pub rate_limit_per_sec: u32, // req/s, default: 1000
-    pub plan: String,         // "free" | "pro" | "enterprise"
+    pub plan: String,            // "free" | "pro" | "enterprise"
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub enabled: bool,
@@ -24,7 +24,7 @@ pub struct Tenant {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TenantCreate {
     pub name: String,
-    pub api_key: String, // Plaintext — wird zu hash umgewandelt
+    pub api_key: String,                 // Plaintext — wird zu hash umgewandelt
     pub rate_limit_per_sec: Option<u32>, // req/s, default: 1000
     pub plan: String,
 }
@@ -119,8 +119,7 @@ impl TenantManagerClient {
 
         let sql = format!(
             "INSERT INTO {}.tenants FORMAT JSONEachRow {}",
-            self.db,
-            tenant_json
+            self.db, tenant_json
         );
 
         self.execute(&sql).await?;
@@ -166,7 +165,9 @@ impl TenantManagerClient {
 
         // Build updated tenant with new values
         let name = input.name.unwrap_or(existing.name);
-        let rate_limit_per_sec = input.rate_limit_per_sec.unwrap_or(existing.rate_limit_per_sec);
+        let rate_limit_per_sec = input
+            .rate_limit_per_sec
+            .unwrap_or(existing.rate_limit_per_sec);
         let plan = input.plan.unwrap_or(existing.plan);
         let enabled = input.enabled.unwrap_or(existing.enabled);
 
@@ -187,8 +188,7 @@ impl TenantManagerClient {
 
         let sql = format!(
             "INSERT INTO {}.tenants FORMAT JSONEachRow {}",
-            self.db,
-            tenant_json
+            self.db, tenant_json
         );
 
         self.execute(&sql).await
@@ -196,12 +196,15 @@ impl TenantManagerClient {
 
     /// Soft-delete: sets enabled = false.
     pub async fn delete_tenant(&self, id: Uuid) -> Result<()> {
-        self.update_tenant(id, TenantUpdate {
-            name: None,
-            rate_limit_per_sec: None,
-            plan: None,
-            enabled: Some(false),
-        })
+        self.update_tenant(
+            id,
+            TenantUpdate {
+                name: None,
+                rate_limit_per_sec: None,
+                plan: None,
+                enabled: Some(false),
+            },
+        )
         .await
     }
 
@@ -289,8 +292,10 @@ impl TenantManagerClient {
             data: Vec<T>,
         }
 
-        let response: ClickHouseResponse<T> = serde_json::from_str(&body)
-            .context(format!("Failed to parse ClickHouse JSON response: {}", body))?;
+        let response: ClickHouseResponse<T> = serde_json::from_str(&body).context(format!(
+            "Failed to parse ClickHouse JSON response: {}",
+            body
+        ))?;
 
         Ok(response.data)
     }
@@ -330,12 +335,12 @@ struct TenantRow {
 /// Converts a TenantRow to a Tenant.
 fn tenant_from_row(row: TenantRow) -> Result<Tenant> {
     let id = Uuid::parse_str(&row.id).context(format!("Invalid UUID: {}", row.id))?;
-    
+
     // Parse timestamps, fallback to current time on error
     let created_at = DateTime::parse_from_str(&row.created_at, "%Y-%m-%d %H:%M:%S%.3f")
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now());
-    
+
     let updated_at = DateTime::parse_from_str(&row.updated_at, "%Y-%m-%d %H:%M:%S%.3f")
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now());
@@ -459,16 +464,16 @@ mod tests {
             rate_limit_per_sec: Some(500),
             plan: "pro".to_string(),
         };
-        
+
         // Test serialization
         let json = serde_json::to_string(&input).unwrap();
         let parsed: TenantCreate = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(parsed.name, "Test Tenant");
         assert_eq!(parsed.api_key, "test-key");
         assert_eq!(parsed.rate_limit_per_sec, Some(500));
         assert_eq!(parsed.plan, "pro");
-        
+
         // Test that None defaults to 1000 in create_tenant logic
         let input_without_rate = TenantCreate {
             name: "Test Tenant 2".to_string(),
@@ -476,10 +481,10 @@ mod tests {
             rate_limit_per_sec: None,
             plan: "free".to_string(),
         };
-        
+
         let json2 = serde_json::to_string(&input_without_rate).unwrap();
         let parsed2: TenantCreate = serde_json::from_str(&json2).unwrap();
-        
+
         assert_eq!(parsed2.rate_limit_per_sec, None);
     }
 
@@ -492,11 +497,11 @@ mod tests {
             plan: Some("enterprise".to_string()),
             enabled: Some(true),
         };
-        
+
         // Test serialization
         let json = serde_json::to_string(&input).unwrap();
         let parsed: TenantUpdate = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(parsed.name, Some("Updated Name".to_string()));
         assert_eq!(parsed.rate_limit_per_sec, Some(200));
         assert_eq!(parsed.plan, Some("enterprise".to_string()));

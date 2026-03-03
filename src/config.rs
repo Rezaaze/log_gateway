@@ -205,9 +205,12 @@ impl Default for TelemetryConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct LokiConfig {
-    #[serde(default)] pub enabled: bool,
-    #[serde(default = "default_loki_endpoint")] pub endpoint: String,
-    #[serde(default = "default_loki_service_name")] pub service_name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_loki_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_loki_service_name")]
+    pub service_name: String,
 }
 
 impl Default for LokiConfig {
@@ -223,9 +226,12 @@ impl Default for LokiConfig {
 /// Configuration for automatic escalation of unacknowledged alerts.
 #[derive(Debug, Deserialize, Clone)]
 pub struct EscalationConfig {
-    #[serde(default = "default_true")] pub auto_escalation_enabled: bool,
-    #[serde(default = "default_check_interval")] pub check_interval_secs: u64,
-    #[serde(default = "default_timeout_secs")] pub timeout_secs: u64,
+    #[serde(default = "default_true")]
+    pub auto_escalation_enabled: bool,
+    #[serde(default = "default_check_interval")]
+    pub check_interval_secs: u64,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
 }
 
 impl Default for EscalationConfig {

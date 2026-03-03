@@ -132,7 +132,10 @@ mod tests {
 
         // Should succeed with whitespace-only endpoint
         let result = init_tracer("test-service", Some("   "));
-        assert!(result.is_ok(), "Should succeed with whitespace-only endpoint");
+        assert!(
+            result.is_ok(),
+            "Should succeed with whitespace-only endpoint"
+        );
     }
 
     #[test]

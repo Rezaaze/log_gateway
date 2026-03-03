@@ -148,30 +148,28 @@ impl RoaPoller {
     }
 
     /// Vergleicht neue mit bekannten ROAs und gibt Deltas zurück.
-    pub fn compute_deltas(&self, new_roas: &HashSet<RoaEntry>, now: DateTime<Utc>) -> Vec<RoaDelta> {
+    pub fn compute_deltas(
+        &self,
+        new_roas: &HashSet<RoaEntry>,
+        now: DateTime<Utc>,
+    ) -> Vec<RoaDelta> {
         let mut known_roas = self.known_roas.lock().unwrap();
-        
+
         // Calculate added ROAs (in new but not in known)
-        let added: Vec<RoaEntry> = new_roas
-            .difference(&*known_roas)
-            .cloned()
-            .collect();
-        
+        let added: Vec<RoaEntry> = new_roas.difference(&*known_roas).cloned().collect();
+
         // Calculate removed ROAs (in known but not in new)
-        let removed: Vec<RoaEntry> = known_roas
-            .difference(new_roas)
-            .cloned()
-            .collect();
-        
+        let removed: Vec<RoaEntry> = known_roas.difference(new_roas).cloned().collect();
+
         let added_count = added.len();
         let removed_count = removed.len();
-        
+
         // Update known ROAs
         *known_roas = new_roas.clone();
-        
+
         // Create deltas
         let mut deltas = Vec::with_capacity(added_count + removed_count);
-        
+
         for entry in added {
             deltas.push(RoaDelta {
                 entry,
@@ -179,7 +177,7 @@ impl RoaPoller {
                 timestamp: now,
             });
         }
-        
+
         for entry in removed {
             deltas.push(RoaDelta {
                 entry,
@@ -187,9 +185,13 @@ impl RoaPoller {
                 timestamp: now,
             });
         }
-        
-        tracing::debug!("Computed {} deltas ({} added, {} removed)", 
-            deltas.len(), added_count, removed_count);
+
+        tracing::debug!(
+            "Computed {} deltas ({} added, {} removed)",
+            deltas.len(),
+            added_count,
+            removed_count
+        );
         deltas
     }
 
@@ -249,7 +251,10 @@ impl RoaPoller {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(anyhow!(
                 "ClickHouse returned error status {}: {}",
                 status,
@@ -257,7 +262,10 @@ impl RoaPoller {
             ));
         }
 
-        tracing::info!("Successfully wrote {} ROA deltas to ClickHouse", deltas.len());
+        tracing::info!(
+            "Successfully wrote {} ROA deltas to ClickHouse",
+            deltas.len()
+        );
         Ok(())
     }
 
@@ -266,11 +274,11 @@ impl RoaPoller {
         let now = Utc::now();
         let new_roas = self.fetch_roas().await?;
         let deltas = self.compute_deltas(&new_roas, now);
-        
+
         if !deltas.is_empty() {
             self.write_deltas(&deltas).await?;
         }
-        
+
         Ok(deltas.len())
     }
 
@@ -278,13 +286,13 @@ impl RoaPoller {
     pub fn start(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-            
+
             // First tick immediately
             interval.tick().await;
-            
+
             loop {
                 interval.tick().await;
-                
+
                 match self.poll_once().await {
                     Ok(count) => {
                         if count > 0 {
@@ -305,15 +313,17 @@ impl RoaPoller {
 /// Parse ASN string (e.g., "AS64512", "as64512", "64512") to u32.
 fn parse_asn(asn_str: &str) -> Result<u32> {
     let asn_str = asn_str.trim();
-    
+
     // Case-insensitive strip of "AS" prefix
     let asn_str = if asn_str.len() > 2 && asn_str[0..2].eq_ignore_ascii_case("as") {
         &asn_str[2..]
     } else {
         asn_str
     };
-    
-    asn_str.parse::<u32>().map_err(|e| anyhow!("Invalid ASN '{}': {}", asn_str, e))
+
+    asn_str
+        .parse::<u32>()
+        .map_err(|e| anyhow!("Invalid ASN '{}': {}", asn_str, e))
 }
 
 #[cfg(test)]
@@ -339,7 +349,7 @@ mod tests {
             "http://test".to_string(),
             "test".to_string(),
         );
-        
+
         // Start with known = {A, B}
         let entry_a = RoaEntry {
             prefix: "1.2.3.0/24".to_string(),
@@ -359,30 +369,36 @@ mod tests {
             origin_as: 64514,
             trust_anchor: "RIPE".to_string(),
         };
-        
+
         {
             let mut known = poller.known_roas.lock().unwrap();
             known.insert(entry_a.clone());
             known.insert(entry_b.clone());
         }
-        
+
         // new = {B, C}
         let mut new_roas = HashSet::new();
         new_roas.insert(entry_b.clone());
         new_roas.insert(entry_c.clone());
-        
+
         let now = Utc::now();
         let deltas = poller.compute_deltas(&new_roas, now);
-        
+
         // Should have: added=[C], removed=[A]
         assert_eq!(deltas.len(), 2);
-        
-        let added_deltas: Vec<_> = deltas.iter().filter(|d| d.action == RoaAction::Added).collect();
-        let removed_deltas: Vec<_> = deltas.iter().filter(|d| d.action == RoaAction::Removed).collect();
-        
+
+        let added_deltas: Vec<_> = deltas
+            .iter()
+            .filter(|d| d.action == RoaAction::Added)
+            .collect();
+        let removed_deltas: Vec<_> = deltas
+            .iter()
+            .filter(|d| d.action == RoaAction::Removed)
+            .collect();
+
         assert_eq!(added_deltas.len(), 1);
         assert_eq!(removed_deltas.len(), 1);
-        
+
         assert_eq!(added_deltas[0].entry, entry_c);
         assert_eq!(removed_deltas[0].entry, entry_a);
     }
@@ -395,7 +411,7 @@ mod tests {
             "http://test".to_string(),
             "test".to_string(),
         );
-        
+
         // known is empty initially
         let entry_a = RoaEntry {
             prefix: "1.2.3.0/24".to_string(),
@@ -409,23 +425,29 @@ mod tests {
             origin_as: 64513,
             trust_anchor: "RIPE".to_string(),
         };
-        
+
         let mut new_roas = HashSet::new();
         new_roas.insert(entry_a.clone());
         new_roas.insert(entry_b.clone());
-        
+
         let now = Utc::now();
         let deltas = poller.compute_deltas(&new_roas, now);
-        
+
         // Should have: added=[A, B], removed=[]
         assert_eq!(deltas.len(), 2);
-        
-        let added_deltas: Vec<_> = deltas.iter().filter(|d| d.action == RoaAction::Added).collect();
-        let removed_deltas: Vec<_> = deltas.iter().filter(|d| d.action == RoaAction::Removed).collect();
-        
+
+        let added_deltas: Vec<_> = deltas
+            .iter()
+            .filter(|d| d.action == RoaAction::Added)
+            .collect();
+        let removed_deltas: Vec<_> = deltas
+            .iter()
+            .filter(|d| d.action == RoaAction::Removed)
+            .collect();
+
         assert_eq!(added_deltas.len(), 2);
         assert_eq!(removed_deltas.len(), 0);
-        
+
         let added_entries: HashSet<_> = added_deltas.iter().map(|d| &d.entry).collect();
         assert!(added_entries.contains(&&entry_a));
         assert!(added_entries.contains(&&entry_b));
@@ -463,22 +485,20 @@ mod tests {
 
         // Call write_deltas with the removed delta
         let deltas = vec![delta];
-        
+
         // We can't call write_deltas because it makes HTTP requests.
         // Instead, we'll test the anomaly sending logic directly.
         // The anomaly should be sent before the HTTP request is made.
         // We'll check that the anomaly is in the channel.
-        
+
         // write_deltas sends anomalies BEFORE making the HTTP request to ClickHouse.
         // The HTTP request will fail (no real server), but that's expected.
         let _result = poller.write_deltas(&deltas).await;
         // Ignore HTTP error — anomaly is sent before the HTTP call.
 
         // Check that an anomaly was received (it should be sent before HTTP failure)
-        let received = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            anomaly_rx.recv()
-        ).await;
+        let received =
+            tokio::time::timeout(std::time::Duration::from_millis(100), anomaly_rx.recv()).await;
 
         // Anomaly MUST have been sent before the HTTP error
         let anomaly = received
@@ -489,7 +509,10 @@ mod tests {
         assert_eq!(anomaly.confidence, 0.65);
         assert_eq!(anomaly.prefix, "1.2.3.0/24");
         assert_eq!(anomaly.origin_as, 64512);
-        assert_eq!(anomaly.details, "ROA removed — potential hijack preparation");
+        assert_eq!(
+            anomaly.details,
+            "ROA removed — potential hijack preparation"
+        );
         assert_eq!(anomaly.tenant_id, "");
     }
 
@@ -521,12 +544,13 @@ mod tests {
         let _result = poller.write_deltas(&deltas).await;
 
         // Check that no anomaly was received (channel should be empty — only Removed triggers)
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            anomaly_rx.recv()
-        ).await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), anomaly_rx.recv()).await;
 
-        assert!(result.is_err(), "Expected timeout (no anomaly for Added delta), but got one");
+        assert!(
+            result.is_err(),
+            "Expected timeout (no anomaly for Added delta), but got one"
+        );
     }
 
     // Test 7: ROA anomaly confidence is warning level
@@ -534,10 +558,10 @@ mod tests {
     fn test_roa_anomaly_confidence_is_warning_level() {
         // Confidence 0.65 lies in Warning range (0.5–0.7)
         use crate::escalation::EscalationLevel;
-        
+
         let level = EscalationLevel::from_confidence(0.65);
         assert_eq!(level, Some(EscalationLevel::Warning));
-        
+
         // Verify the exact confidence value used in the implementation
         assert_eq!(0.65, 0.65); // Just to show the value matches
     }

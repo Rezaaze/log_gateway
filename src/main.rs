@@ -25,18 +25,19 @@ fn init_tracing_with_loki(config: &GatewayConfig) -> Result<()> {
         tracing::info!("tokio-console subscriber active on 127.0.0.1:6669");
         // With tokio-console, we still want to add Loki layer if enabled
         if config.loki.enabled {
-            if let Some((loki_layer, background_task)) = loki_logger::build_loki_layer(
-                &config.loki.endpoint,
-                &config.loki.service_name,
-            )? {
+            if let Some((loki_layer, background_task)) =
+                loki_logger::build_loki_layer(&config.loki.endpoint, &config.loki.service_name)?
+            {
                 // Add Loki layer to existing subscriber
                 tracing::subscriber::set_global_default(
-                    tracing_subscriber::registry()
-                        .with(loki_layer)
+                    tracing_subscriber::registry().with(loki_layer),
                 )?;
                 // Spawn background task
                 tokio::spawn(background_task);
-                info!("Loki logging enabled with endpoint: {}", config.loki.endpoint);
+                info!(
+                    "Loki logging enabled with endpoint: {}",
+                    config.loki.endpoint
+                );
             } else {
                 info!("Loki logging disabled (invalid endpoint or empty)");
             }
@@ -45,31 +46,27 @@ fn init_tracing_with_loki(config: &GatewayConfig) -> Result<()> {
         }
         return Ok(());
     }
-    
+
     // Standard initialization without tokio-console
     let log_format = std::env::var("LOG_FORMAT").unwrap_or_else(|_| "text".to_string());
-    
+
     // Create base subscriber based on LOG_FORMAT
     let fmt_layer = match log_format.to_lowercase().as_str() {
-        "json" => {
-            fmt::layer()
-                .json()
-                .with_timer(fmt::time::UtcTime::rfc_3339())
-                .with_level(true)
-                .with_target(true)
-                .with_file(false)
-                .with_line_number(false)
-                .with_thread_ids(false)
-                .with_thread_names(false)
-                .boxed()
-        }
-        "text" => {
-            fmt::layer()
-                .with_timer(fmt::time::UtcTime::rfc_3339())
-                .with_level(true)
-                .with_target(true)
-                .boxed()
-        }
+        "json" => fmt::layer()
+            .json()
+            .with_timer(fmt::time::UtcTime::rfc_3339())
+            .with_level(true)
+            .with_target(true)
+            .with_file(false)
+            .with_line_number(false)
+            .with_thread_ids(false)
+            .with_thread_names(false)
+            .boxed(),
+        "text" => fmt::layer()
+            .with_timer(fmt::time::UtcTime::rfc_3339())
+            .with_level(true)
+            .with_target(true)
+            .boxed(),
         _ => {
             tracing::warn!(
                 "Invalid LOG_FORMAT value '{}', using default text format",
@@ -82,24 +79,23 @@ fn init_tracing_with_loki(config: &GatewayConfig) -> Result<()> {
                 .boxed()
         }
     };
-    
+
     // Create env filter
-    let filter_layer = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info".into());
-    
+    let filter_layer = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+
     // Start with registry and filter
     let subscriber = tracing_subscriber::registry()
         .with(filter_layer)
         .with(fmt_layer);
-    
+
     // Add Loki layer if enabled
     let loki_background_task = if config.loki.enabled {
-        match loki_logger::build_loki_layer(
-            &config.loki.endpoint,
-            &config.loki.service_name,
-        )? {
+        match loki_logger::build_loki_layer(&config.loki.endpoint, &config.loki.service_name)? {
             Some((loki_layer, background_task)) => {
-                info!("Loki logging enabled with endpoint: {}", config.loki.endpoint);
+                info!(
+                    "Loki logging enabled with endpoint: {}",
+                    config.loki.endpoint
+                );
                 // Add Loki layer to subscriber
                 let subscriber = subscriber.with(loki_layer.boxed());
                 // Set as global default
@@ -122,12 +118,12 @@ fn init_tracing_with_loki(config: &GatewayConfig) -> Result<()> {
             .context("Failed to set global tracing subscriber")?;
         None
     };
-    
+
     // Spawn Loki background task if we have one
     if let Some(background_task) = loki_background_task {
         tokio::spawn(background_task);
     }
-    
+
     tracing::info!("Logging initialized with {} format", log_format);
     Ok(())
 }
@@ -167,9 +163,15 @@ async fn main() -> Result<()> {
 
     // Initialize OpenTelemetry tracer if enabled
     if config.telemetry.enabled {
-        telemetry::init_tracer(&config.telemetry.service_name, Some(&config.telemetry.otlp_endpoint))
-            .context("Failed to initialize OpenTelemetry tracer")?;
-        info!("OpenTelemetry tracing enabled with endpoint: {}", config.telemetry.otlp_endpoint);
+        telemetry::init_tracer(
+            &config.telemetry.service_name,
+            Some(&config.telemetry.otlp_endpoint),
+        )
+        .context("Failed to initialize OpenTelemetry tracer")?;
+        info!(
+            "OpenTelemetry tracing enabled with endpoint: {}",
+            config.telemetry.otlp_endpoint
+        );
     } else {
         info!("OpenTelemetry tracing disabled");
     }

@@ -190,7 +190,9 @@ mod tests {
         let status = if irr_asns.contains(&origin_as) {
             IrrStatus::Consistent
         } else {
-            IrrStatus::Inconsistent { irr_asns: irr_asns.clone() }
+            IrrStatus::Inconsistent {
+                irr_asns: irr_asns.clone(),
+            }
         };
         assert_eq!(status, IrrStatus::Consistent);
     }
@@ -203,7 +205,9 @@ mod tests {
         let status = if irr_asns.contains(&origin_as) {
             IrrStatus::Consistent
         } else {
-            IrrStatus::Inconsistent { irr_asns: irr_asns.clone() }
+            IrrStatus::Inconsistent {
+                irr_asns: irr_asns.clone(),
+            }
         };
         match status {
             IrrStatus::Inconsistent { irr_asns } => {
@@ -233,14 +237,19 @@ mod tests {
             }
         }"#;
         let response: RipeSearchResponse = serde_json::from_str(json).unwrap();
-        let asns: Vec<u32> = response.objects.object.iter()
+        let asns: Vec<u32> = response
+            .objects
+            .object
+            .iter()
             .flat_map(|o| o.attributes.attribute.iter())
             .filter(|a| a.name == "origin")
             .filter_map(|a| {
                 let s = a.value.trim();
                 let digits = if s.len() > 2 && s[0..2].eq_ignore_ascii_case("as") {
                     &s[2..]
-                } else { s };
+                } else {
+                    s
+                };
                 digits.parse::<u32>().ok()
             })
             .collect();

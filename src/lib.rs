@@ -44,8 +44,8 @@ pub mod schema_validator;
 pub mod secrets;
 pub mod sink;
 pub mod telemetry;
-pub mod tenant_manager;
 pub mod tenant_api;
+pub mod tenant_manager;
 pub mod webhook;
 
 pub use anomaly_detector::AnomalyDetector;
@@ -168,7 +168,8 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
 
     // Create anomaly detector + alert channel
     let (alert_tx, alert_rx) = tokio::sync::mpsc::channel::<anomaly_detector::Anomaly>(1024);
-    let detector = anomaly_detector::AnomalyDetector::with_metrics(alert_tx, Arc::new(metrics.clone()));
+    let detector =
+        anomaly_detector::AnomalyDetector::with_metrics(alert_tx, Arc::new(metrics.clone()));
 
     // Warmup HijackDetector from ClickHouse history if available
     if let Some(ref qclient) = bgp_query_client {
@@ -179,8 +180,11 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
 
     // Build webhook targets from config
     let webhook_targets: Vec<crate::webhook::WebhookTarget> = if config.webhooks.enabled {
-        config.webhooks.targets.iter().filter_map(|t| {
-            match t.target_type.as_str() {
+        config
+            .webhooks
+            .targets
+            .iter()
+            .filter_map(|t| match t.target_type.as_str() {
                 "slack" => {
                     let channel = t.channel.clone().unwrap_or_else(|| "#alerts".to_string());
                     Some(crate::webhook::WebhookTarget::Slack {
@@ -199,8 +203,8 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
                     tracing::warn!("Unknown webhook target_type '{}', skipping", other);
                     None
                 }
-            }
-        }).collect()
+            })
+            .collect()
     } else {
         Vec::new()
     };
@@ -219,7 +223,10 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
                         r
                     }
                     Err(e) => {
-                        tracing::warn!("Webhook init failed, falling back to no-webhook router: {}", e);
+                        tracing::warn!(
+                            "Webhook init failed, falling back to no-webhook router: {}",
+                            e
+                        );
                         crate::escalation::EscalationRouter::new(
                             Arc::clone(am),
                             Arc::new(metrics.clone()),
@@ -227,10 +234,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
                     }
                 }
             } else {
-                crate::escalation::EscalationRouter::new(
-                    Arc::clone(am),
-                    Arc::new(metrics.clone()),
-                )
+                crate::escalation::EscalationRouter::new(Arc::clone(am), Arc::new(metrics.clone()))
             };
             Some(Arc::new(router))
         } else {
@@ -309,13 +313,13 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
                 config.clickhouse.database.clone(),
                 config.clickhouse.table.clone(),
             ));
-            
+
             // Load snapshot immediately on startup (before first training cycle)
             let trainer_for_startup = Arc::clone(&trainer);
             tokio::spawn(async move {
                 model_trainer::ModelTrainer::load_snapshot_on_startup(trainer_for_startup).await;
             });
-            
+
             tokio::spawn(model_trainer::ModelTrainer::run_daily(trainer));
             tracing::info!("ModelTrainer daily retraining task spawned");
         }
@@ -442,8 +446,14 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         .route("/api/v1/tenants", get(tenant_api::list_tenants_handler))
         .route("/api/v1/tenants", post(tenant_api::create_tenant_handler))
         .route("/api/v1/tenants/:id", get(tenant_api::get_tenant_handler))
-        .route("/api/v1/tenants/:id", put(tenant_api::update_tenant_handler))
-        .route("/api/v1/tenants/:id", delete(tenant_api::delete_tenant_handler))
+        .route(
+            "/api/v1/tenants/:id",
+            put(tenant_api::update_tenant_handler),
+        )
+        .route(
+            "/api/v1/tenants/:id",
+            delete(tenant_api::delete_tenant_handler),
+        )
         .route_layer(axum_middleware::from_fn_with_state(
             app_state.clone(),
             middleware::require_jwt,

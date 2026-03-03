@@ -33,7 +33,10 @@ impl CostReporter {
 
         // Header
         report.push_str("=== Monthly Cost Report ===\n");
-        report.push_str(&format!("Generated: {}\n\n", now.format("%Y-%m-%d %H:%M:%S UTC")));
+        report.push_str(&format!(
+            "Generated: {}\n\n",
+            now.format("%Y-%m-%d %H:%M:%S UTC")
+        ));
 
         // Tenant details
         for tenant in summary {
@@ -79,7 +82,7 @@ impl CostReporter {
         // Typically this would be something like http://localhost:8025/api/v2/send for MailHog
         // or a custom smtp2http endpoint
         let gateway_url = format!("http://{}/api/v2/send", self.smtp_config.host);
-        
+
         tracing::info!(
             "Sending monthly cost report to {} recipients via {}",
             self.smtp_config.to.len(),
@@ -126,7 +129,10 @@ impl CostReporter {
                 );
 
                 // Sleep until next month start
-                time::sleep(time::Duration::from_secs(sleep_duration.num_seconds() as u64)).await;
+                time::sleep(time::Duration::from_secs(
+                    sleep_duration.num_seconds() as u64
+                ))
+                .await;
             }
 
             // Generate and send report
@@ -141,7 +147,7 @@ impl CostReporter {
     async fn generate_and_send_report(&self) -> Result<()> {
         let summary = self.cost_tracker.summary();
         let report = Self::generate_report(&summary.tenants);
-        
+
         self.send_report(&report).await
     }
 
@@ -149,13 +155,13 @@ impl CostReporter {
     pub fn next_month_start(now: DateTime<Utc>) -> DateTime<Utc> {
         let mut year = now.year();
         let mut month = now.month() + 1;
-        
+
         // Handle December -> January year rollover
         if month > 12 {
             month = 1;
             year += 1;
         }
-        
+
         // Create datetime for the first day of next month at 00:00:00 UTC
         Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0)
             .single()
@@ -171,7 +177,7 @@ mod tests {
     fn test_generate_report_empty() {
         let summary: Vec<TenantStats> = Vec::new();
         let report = CostReporter::generate_report(&summary);
-        
+
         assert!(report.contains("Total tenants: 0"));
         assert!(report.contains("=== Monthly Cost Report ==="));
     }
@@ -186,9 +192,9 @@ mod tests {
             cache_hits: 0,
             cache_misses: 0,
         }];
-        
+
         let report = CostReporter::generate_report(&summary);
-        
+
         assert!(report.contains("Tenant: acme-corp"));
         assert!(report.contains("Requests: 125000"));
         // Check for "Bytes:" followed by "45.2 MB" (allow flexible spacing)
@@ -203,7 +209,7 @@ mod tests {
         // 2026-01-15 14:30:00 UTC
         let jan_15 = Utc.with_ymd_and_hms(2026, 1, 15, 14, 30, 0).unwrap();
         let next = CostReporter::next_month_start(jan_15);
-        
+
         // Should be 2026-02-01 00:00:00 UTC
         let expected = Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap();
         assert_eq!(next, expected);
@@ -214,7 +220,7 @@ mod tests {
         // 2026-12-20 23:59:59 UTC
         let dec_20 = Utc.with_ymd_and_hms(2026, 12, 20, 23, 59, 59).unwrap();
         let next = CostReporter::next_month_start(dec_20);
-        
+
         // Should be 2027-01-01 00:00:00 UTC (year rollover)
         let expected = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
         assert_eq!(next, expected);
@@ -225,7 +231,7 @@ mod tests {
         // 2026-02-28 00:00:00 UTC (non-leap year)
         let feb_28 = Utc.with_ymd_and_hms(2026, 2, 28, 0, 0, 0).unwrap();
         let next = CostReporter::next_month_start(feb_28);
-        
+
         // Should be 2026-03-01 00:00:00 UTC
         let expected = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
         assert_eq!(next, expected);
@@ -236,7 +242,7 @@ mod tests {
         // 2024-02-29 12:00:00 UTC (leap year)
         let feb_29 = Utc.with_ymd_and_hms(2024, 2, 29, 12, 0, 0).unwrap();
         let next = CostReporter::next_month_start(feb_29);
-        
+
         // Should be 2024-03-01 00:00:00 UTC
         let expected = Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap();
         assert_eq!(next, expected);

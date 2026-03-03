@@ -129,7 +129,11 @@ impl ModelTrainer {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("ClickHouse returned {} during model training: {}", status, body);
+            anyhow::bail!(
+                "ClickHouse returned {} during model training: {}",
+                status,
+                body
+            );
         }
 
         let body = response
@@ -150,7 +154,11 @@ impl ModelTrainer {
                     count += 1;
                 }
                 Err(e) => {
-                    tracing::warn!("ModelTrainer: failed to parse training row: {} — {}", e, line);
+                    tracing::warn!(
+                        "ModelTrainer: failed to parse training row: {} — {}",
+                        e,
+                        line
+                    );
                 }
             }
         }
@@ -178,16 +186,24 @@ impl ModelTrainer {
 
             time::sleep(time::Duration::from_secs(sleep_secs)).await;
 
-            tracing::info!("ModelTrainer: starting daily retraining from ClickHouse (last 30 days)");
+            tracing::info!(
+                "ModelTrainer: starting daily retraining from ClickHouse (last 30 days)"
+            );
 
             match self.train_from_clickhouse().await {
                 Ok(count) => {
-                    tracing::info!("ModelTrainer: retraining complete — {} rows processed", count);
-                    
+                    tracing::info!(
+                        "ModelTrainer: retraining complete — {} rows processed",
+                        count
+                    );
+
                     // Save snapshot after successful training
                     match self.save_snapshot().await {
                         Ok(snapshot_rows) => {
-                            tracing::info!("ModelTrainer: saved {} rows to cold-start snapshot", snapshot_rows);
+                            tracing::info!(
+                                "ModelTrainer: saved {} rows to cold-start snapshot",
+                                snapshot_rows
+                            );
                         }
                         Err(e) => {
                             tracing::warn!("ModelTrainer: failed to save cold-start snapshot (will retry tomorrow): {}", e);
@@ -195,7 +211,10 @@ impl ModelTrainer {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("ModelTrainer: retraining failed (will retry tomorrow): {}", e);
+                    tracing::warn!(
+                        "ModelTrainer: retraining failed (will retry tomorrow): {}",
+                        e
+                    );
                 }
             }
         }
@@ -258,7 +277,11 @@ impl ModelTrainer {
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                anyhow::bail!("ClickHouse returned {} during baseline snapshot save: {}", status, body);
+                anyhow::bail!(
+                    "ClickHouse returned {} during baseline snapshot save: {}",
+                    status,
+                    body
+                );
             }
 
             total_rows += baseline_rows.len();
@@ -302,7 +325,11 @@ impl ModelTrainer {
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                anyhow::bail!("ClickHouse returned {} during AS knowledge snapshot save: {}", status, body);
+                anyhow::bail!(
+                    "ClickHouse returned {} during AS knowledge snapshot save: {}",
+                    status,
+                    body
+                );
             }
 
             total_rows += as_knowledge_rows.len();
@@ -363,14 +390,22 @@ impl ModelTrainer {
                         total_rows += 1;
                     }
                     Err(e) => {
-                        tracing::warn!("ModelTrainer: failed to parse baseline snapshot row: {} — {}", e, line);
+                        tracing::warn!(
+                            "ModelTrainer: failed to parse baseline snapshot row: {} — {}",
+                            e,
+                            line
+                        );
                     }
                 }
             }
         } else {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("ClickHouse returned {} during baseline snapshot load: {}", status, body);
+            anyhow::bail!(
+                "ClickHouse returned {} during baseline snapshot load: {}",
+                status,
+                body
+            );
         }
 
         // Load AS knowledge snapshots
@@ -410,14 +445,22 @@ impl ModelTrainer {
                         total_rows += 1;
                     }
                     Err(e) => {
-                        tracing::warn!("ModelTrainer: failed to parse AS knowledge snapshot row: {} — {}", e, line);
+                        tracing::warn!(
+                            "ModelTrainer: failed to parse AS knowledge snapshot row: {} — {}",
+                            e,
+                            line
+                        );
                     }
                 }
             }
         } else {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("ClickHouse returned {} during AS knowledge snapshot load: {}", status, body);
+            anyhow::bail!(
+                "ClickHouse returned {} during AS knowledge snapshot load: {}",
+                status,
+                body
+            );
         }
 
         Ok(total_rows)
@@ -429,13 +472,19 @@ impl ModelTrainer {
     /// Errors are logged as warnings but do not prevent the application from starting.
     pub async fn load_snapshot_on_startup(trainer: Arc<Self>) {
         tracing::info!("ModelTrainer: attempting to load cold-start snapshot from ClickHouse");
-        
+
         match trainer.load_snapshot().await {
             Ok(count) => {
-                tracing::info!("ModelTrainer: loaded {} rows from cold-start snapshot", count);
+                tracing::info!(
+                    "ModelTrainer: loaded {} rows from cold-start snapshot",
+                    count
+                );
             }
             Err(e) => {
-                tracing::warn!("ModelTrainer: failed to load cold-start snapshot (continuing without): {}", e);
+                tracing::warn!(
+                    "ModelTrainer: failed to load cold-start snapshot (continuing without): {}",
+                    e
+                );
             }
         }
     }
@@ -498,7 +547,10 @@ mod tests {
             "bgp_events".to_string(),
         );
         let result = trainer.train_from_clickhouse().await;
-        assert!(result.is_err(), "Expected Err on connection refused, got Ok");
+        assert!(
+            result.is_err(),
+            "Expected Err on connection refused, got Ok"
+        );
     }
 
     /// Verify that baseline is updated correctly when we simulate rows.
@@ -518,7 +570,10 @@ mod tests {
         // After 10 rows the EMA should be close to 5.0
         let z = baseline.z_score("10.0.0.0/8", 5.0);
         assert!(z.is_some(), "Expected Some z-score after 10 samples");
-        assert!(z.unwrap().abs() < 1.0, "Z-score for in-distribution value should be small");
+        assert!(
+            z.unwrap().abs() < 1.0,
+            "Z-score for in-distribution value should be small"
+        );
 
         // AS 64512 has been seen on 10 days → well-known
         assert!(baseline.as_knowledge().is_well_known(64512));
@@ -544,11 +599,11 @@ mod tests {
     #[tokio::test]
     async fn test_save_snapshot_fails_gracefully_on_no_server() {
         let baseline = Arc::new(BaselineModel::default());
-        
+
         // Add some data so save_snapshot will actually try to send HTTP requests
         baseline.update("10.0.0.0/8", 5.0);
         baseline.record_as_seen(64512, "2024-01-01");
-        
+
         let trainer = ModelTrainer::new(
             baseline,
             "http://127.0.0.1:19999".to_string(), // nothing listening here
@@ -556,7 +611,10 @@ mod tests {
             "bgp_events".to_string(),
         );
         let result = trainer.save_snapshot().await;
-        assert!(result.is_err(), "Expected Err on connection refused, got Ok");
+        assert!(
+            result.is_err(),
+            "Expected Err on connection refused, got Ok"
+        );
     }
 
     /// Verify that `load_snapshot` fails gracefully when the server is unreachable.
@@ -570,7 +628,10 @@ mod tests {
             "bgp_events".to_string(),
         );
         let result = trainer.load_snapshot().await;
-        assert!(result.is_err(), "Expected Err on connection refused, got Ok");
+        assert!(
+            result.is_err(),
+            "Expected Err on connection refused, got Ok"
+        );
     }
 
     /// Verify that `load_snapshot_on_startup` does not panic when server is unreachable.
@@ -583,19 +644,16 @@ mod tests {
             "bgp".to_string(),
             "bgp_events".to_string(),
         ));
-        
+
         // This should not panic, only log warnings
         ModelTrainer::load_snapshot_on_startup(trainer).await;
-        
-        // If we reach here, no panic occurred
-        assert!(true);
     }
 
     /// Verify that direct DashMap insert works (PrefixBaseline fields are public).
     #[test]
     fn test_insert_baseline_direct() {
         let baseline = Arc::new(BaselineModel::default());
-        
+
         // Test that we can directly insert into baselines DashMap
         baseline.baselines().insert(
             "10.0.0.0/8".to_string(),
@@ -605,7 +663,7 @@ mod tests {
                 sample_count: 10,
             },
         );
-        
+
         // Verify the entry was inserted
         let entry = baseline.baselines().get("10.0.0.0/8");
         assert!(entry.is_some());
@@ -619,10 +677,10 @@ mod tests {
     #[test]
     fn test_snapshot_roundtrip_logic() {
         use crate::baseline_model::PrefixBaseline;
-        
+
         // Create a baseline model and populate it
         let baseline = Arc::new(BaselineModel::default());
-        
+
         // Add some baseline data
         baseline.baselines().insert(
             "10.0.0.0/8".to_string(),
@@ -640,19 +698,19 @@ mod tests {
                 sample_count: 5,
             },
         );
-        
+
         // Add some AS knowledge
         baseline.record_as_seen(64512, "2024-01-01");
         baseline.record_as_seen(64512, "2024-01-02");
         baseline.record_as_seen(64513, "2024-01-01");
-        
+
         // Simulate save snapshot: iterate baselines and collect rows
         let baseline_rows: Vec<_> = baseline
             .baselines()
             .iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
-        
+
         // Simulate save snapshot: iterate AS knowledge and collect rows
         let as_knowledge_rows: Vec<_> = baseline
             .as_knowledge()
@@ -660,15 +718,15 @@ mod tests {
             .iter()
             .map(|entry| (*entry.key(), entry.value().clone()))
             .collect();
-        
+
         // Verify we collected the right data
         assert_eq!(baseline_rows.len(), 2);
         assert_eq!(as_knowledge_rows.len(), 2);
-        
+
         // Check baseline data
         let (prefix1, baseline1) = &baseline_rows[0];
         let (_prefix2, baseline2) = &baseline_rows[1];
-        
+
         // Order might vary, so check both
         if prefix1 == "10.0.0.0/8" {
             assert_eq!(baseline1.ema, 5.0);
@@ -685,11 +743,11 @@ mod tests {
             assert_eq!(baseline1.variance_ema, 0.05);
             assert_eq!(baseline1.sample_count, 5);
         }
-        
+
         // Check AS knowledge data
         let mut asn_64512_days = None;
         let mut asn_64513_days = None;
-        
+
         for (asn, days) in &as_knowledge_rows {
             if *asn == 64512 {
                 asn_64512_days = Some(days);
@@ -697,13 +755,13 @@ mod tests {
                 asn_64513_days = Some(days);
             }
         }
-        
+
         assert!(asn_64512_days.is_some());
         assert!(asn_64513_days.is_some());
-        
+
         let days_64512 = asn_64512_days.unwrap();
         let days_64513 = asn_64513_days.unwrap();
-        
+
         assert!(days_64512.contains(&"2024-01-01".to_string()));
         assert!(days_64512.contains(&"2024-01-02".to_string()));
         assert!(days_64513.contains(&"2024-01-01".to_string()));
