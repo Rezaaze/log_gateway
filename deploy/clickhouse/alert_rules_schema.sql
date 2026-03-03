@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS bgp.alert_rules (
     rule_type   LowCardinality(String),
     threshold   Float64,
     enabled     Bool DEFAULT true,
+    tenant_id   String DEFAULT '',
     created_at  DateTime DEFAULT now(),
     updated_at  DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated_at)

@@ -17,6 +17,8 @@ pub struct AlertRule {
     pub rule_type: String, // "hijack" | "flap" | "leak" | "custom"
     pub threshold: f64,
     pub enabled: bool,
+    #[serde(default)]
+    pub tenant_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -28,6 +30,8 @@ pub struct AlertRuleCreate {
     pub description: String,
     pub rule_type: String,
     pub threshold: f64,
+    #[serde(default)]
+    pub tenant_id: Option<String>,
 }
 
 /// Input for updating an existing alert rule.
@@ -114,14 +118,18 @@ impl AlertManagerClient {
             ));
         }
 
+        // Convert tenant_id: None → "" (empty string), Some(value) → value
+        let tenant_id_value = input.tenant_id.as_deref().unwrap_or("");
+
         let sql = format!(
-            "INSERT INTO {}.alert_rules (name, description, rule_type, threshold) \
-             VALUES ('{}', '{}', '{}', {})",
+            "INSERT INTO {}.alert_rules (name, description, rule_type, threshold, tenant_id) \
+             VALUES ('{}', '{}', '{}', {}, '{}')",
             self.database,
             input.name.replace("'", "''"),
             input.description.replace("'", "''"),
             input.rule_type.replace("'", "''"),
-            input.threshold
+            input.threshold,
+            tenant_id_value.replace("'", "''")
         );
 
         self.execute(&sql).await?;
@@ -153,7 +161,7 @@ impl AlertManagerClient {
 
         // Validate threshold if provided
         if let Some(t) = input.threshold {
-            if t < 0.0 || t > 1.0 {
+            if !(0.0..=1.0).contains(&t) {
                 return Err(anyhow::anyhow!(
                     "Threshold must be between 0.0 and 1.0, got {}",
                     t
@@ -161,16 +169,20 @@ impl AlertManagerClient {
             }
         }
 
+        // Convert tenant_id: None → "" (empty string), Some(value) → value
+        let tenant_id_value = existing.tenant_id.as_deref().unwrap_or("");
+
         let sql = format!(
-            "INSERT INTO {}.alert_rules (id, name, description, rule_type, threshold, enabled) \
-             VALUES ('{}', '{}', '{}', '{}', {}, {})",
+            "INSERT INTO {}.alert_rules (id, name, description, rule_type, threshold, enabled, tenant_id) \
+             VALUES ('{}', '{}', '{}', '{}', {}, {}, '{}')",
             self.database,
             id,
             name.replace("'", "''"),
             description.replace("'", "''"),
             existing.rule_type.replace("'", "''"),
             threshold,
-            enabled
+            enabled,
+            tenant_id_value.replace("'", "''")
         );
 
         self.execute(&sql).await?;
@@ -184,8 +196,8 @@ impl AlertManagerClient {
     /// We don't physically delete rows in ClickHouse; we mark them as disabled.
     pub async fn delete_rule(&self, id: Uuid) -> Result<()> {
         let sql = format!(
-            "INSERT INTO {}.alert_rules (id, name, description, rule_type, threshold, enabled) \
-             SELECT id, name, description, rule_type, threshold, false \
+            "INSERT INTO {}.alert_rules (id, name, description, rule_type, threshold, enabled, tenant_id) \
+             SELECT id, name, description, rule_type, threshold, false, tenant_id \
              FROM {}.alert_rules FINAL WHERE id = '{}'",
             self.database, self.database, id
         );

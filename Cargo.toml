@@ -20,10 +20,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 config = "0.14"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time", "registry"] }
+tracing-opentelemetry = "0.28"
+tracing-loki = { version = "0.2", features = ["compat-0-2-1"] }
 tower = "0.4"
+url = "2"
 tower-http = { version = "0.5", features = ["trace", "compression-gzip"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 anyhow = "1"
@@ -48,6 +51,10 @@ utoipa-swagger-ui = { version = "7", features = ["axum"] }
 crossbeam = { version = "0.8", features = ["crossbeam-queue"] }
 console-subscriber = { version = "0.4", optional = true }
 reqwest = { version = "0.12", features = ["json"], default-features = false }
+opentelemetry = { version = "0.27", features = ["trace"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["tonic", "trace"] }
+opentelemetry-semantic-conventions = "0.27"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
@@ -57,6 +64,7 @@ tempfile = "3"
 reqwest = { version = "0.12", features = ["json"], default-features = false }
 proptest = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
+toml = "0.8"
 
 [[bench]]
 name = "gateway_benchmarks"

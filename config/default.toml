@@ -49,3 +49,41 @@ routinator_url = "http://routinator:8323"
 enabled = false
 cert_path = "certs/cert.pem"
 key_path  = "certs/key.pem"
+
+[webhooks]
+enabled = false
+
+# Slack-Beispiel (auskommentiert):
+# [[webhooks.targets]]
+# target_type = "slack"
+# url = "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+# channel = "#bgp-alerts"
+
+# Generic-Beispiel (auskommentiert):
+# [[webhooks.targets]]
+# target_type = "generic"
+# url = "https://webhook.example.com/alert"
+# [webhooks.targets.headers]
+# X-API-Key = "secret"
+
+[telemetry]
+enabled = false
+otlp_endpoint = "http://localhost:4317"
+service_name = "log-gateway"
+
+[loki]
+enabled = false
+endpoint = "http://localhost:3100"
+service_name = "log-gateway"
+
+[escalation]
+auto_escalation_enabled = true
+check_interval_secs = 60
+timeout_secs = 300
+
+[smtp]
+enabled = false
+host = "localhost"
+port = 587
+from = "gateway@localhost"
+# to = ["admin@example.com"]

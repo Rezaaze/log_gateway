@@ -3,6 +3,36 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{error, info};
 
+/// Returns a watch::Receiver that fires (sends ()) on every SIGHUP.
+/// Separate from the config watch — consumers only need to know "reload happened".
+pub fn reload_signal_rx() -> watch::Receiver<()> {
+    let (tx, rx) = watch::channel(());
+
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sighup = match signal(SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to install SIGHUP handler for reload signal: {}", e);
+                return;
+            }
+        };
+        loop {
+            sighup.recv().await;
+            info!("SIGHUP received — sending reload signal...");
+            let _ = tx.send(());
+        }
+    });
+
+    #[cfg(not(unix))]
+    {
+        drop(tx);
+    }
+
+    rx
+}
+
 pub fn start_config_watcher() -> watch::Receiver<Arc<GatewayConfig>> {
     let config = GatewayConfig::load().expect("initial config load failed");
     let (tx, rx) = watch::channel(Arc::new(config));

@@ -1,0 +1,6 @@
+*.pem
+*.key
+*.crt
+*.p12
+!.gitignore
+!README.md

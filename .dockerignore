@@ -1,0 +1,6 @@
+target/
+data/
+.git/
+.gitignore
+*.md
+RAM_MONITORING.md

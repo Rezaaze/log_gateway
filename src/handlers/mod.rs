@@ -8,7 +8,7 @@ use axum::{
 use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, instrument};
 use uuid::Uuid;
 
 use crate::anomaly_detector::AnomalyDetector;
@@ -18,6 +18,7 @@ use crate::clickhouse_exporter::{self, ClickHouseExporter};
 use crate::cost_tracker::{CostTracker, GatewayCostSummary};
 use crate::metrics::GatewayMetrics;
 use crate::models::{BatchEntryResult, BatchIngestResponse, IngestResponse, LogEntry, LogLevel};
+use crate::quota_manager::QuotaManager;
 use crate::redactor::Redactor;
 use crate::s3_exporter::S3Exporter;
 use crate::sink::{SinkRecord, StorageSink};
@@ -51,6 +52,8 @@ pub struct AppState {
     pub bgp_query_client: Option<Arc<ClickHouseQueryClient>>,
     pub anomaly_detector: Option<Arc<AnomalyDetector>>,
     pub rpki_tx: Option<tokio::sync::mpsc::Sender<crate::clickhouse_exporter::BgpClickHouseRecord>>,
+    /// IRR cache for checking prefix origin consistency with IRR databases
+    pub irr_cache: Option<Arc<crate::irr_cache::IrrCache>>,
     pub sink_output_dir: PathBuf,
     pub started_at: std::time::Instant,
     /// API key cached at startup — avoids per-request disk reads of /run/secrets/
@@ -59,6 +62,10 @@ pub struct AppState {
     pub jwt_secret: Option<Arc<String>>,
     /// Alert manager client for managing alert rules and history
     pub alert_manager_client: Option<Arc<crate::alert_manager::AlertManagerClient>>,
+    /// Tenant manager client for managing tenants and API keys
+    pub tenant_manager_client: Option<Arc<crate::tenant_manager::TenantManagerClient>>,
+    /// Quota manager for rate limiting per tenant with soft/hard quotas
+    pub quota_manager: Arc<QuotaManager>,
 }
 
 #[utoipa::path(
@@ -73,6 +80,7 @@ pub struct AppState {
     ),
     security(("api_key" = []), ("bearer_auth" = []))
 )]
+#[instrument(skip(state, body), fields(tenant_id, pii_hits))]
 pub async fn ingest_log(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -139,6 +147,9 @@ pub async fn ingest_log(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("anonymous");
 
+    // Record tenant_id in the span
+    tracing::Span::current().record("tenant_id", tenant_id);
+
     // Validate tenant ID using same logic as rate_limiter.rs
     fn is_valid_tenant_id(id: &str) -> bool {
         id.len() <= 64
@@ -161,7 +172,64 @@ pub async fn ingest_log(
             .into_response();
     }
 
-    // 4. Rest des Handlers ab hier unverändert weiterführen
+    // 5. Check quota for tenant
+    // Get rate limit from tenant config if tenant manager is available and tenant found by API key
+    let rate_limit = if let Some(tenant_manager) = &state.tenant_manager_client {
+        // Get API key from X-API-Key header
+        if let Some(api_key) = headers.get("X-API-Key").and_then(|v| v.to_str().ok()) {
+            match tenant_manager.find_by_api_key(api_key).await {
+                Ok(Some(tenant)) => {
+                    // Use tenant's rate limit
+                    tenant.rate_limit_per_sec
+                }
+                Ok(None) => {
+                    // Tenant not found, use default
+                    1000
+                }
+                Err(e) => {
+                    // Error querying tenant manager, log and use default
+                    tracing::warn!("Failed to query tenant manager: {}", e);
+                    1000
+                }
+            }
+        } else {
+            // No API key header, use default
+            1000
+        }
+    } else {
+        // No tenant manager, use default
+        1000
+    };
+    
+    // Generate a deterministic UUID from tenant_id string for quota tracking
+    let tenant_uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, tenant_id.as_bytes());
+    
+    match state.quota_manager.check_and_increment(tenant_uuid, rate_limit) {
+        crate::quota_manager::QuotaResult::Exceeded => {
+            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            state.metrics.record_duration(duration_ms);
+            state.metrics.record_quota_exceeded(tenant_id);
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                create_headers(&id),
+                Json(serde_json::json!({
+                    "error": "quota_exceeded",
+                    "hint": "rate limit exceeded, please try again later"
+                })),
+            )
+                .into_response();
+        }
+        crate::quota_manager::QuotaResult::SoftWarning { usage_pct: _ } => {
+            // Allow request but record warning metric
+            state.metrics.record_quota_warning(tenant_id);
+            // Continue processing...
+        }
+        crate::quota_manager::QuotaResult::Allowed => {
+            // Continue processing...
+        }
+    }
+
+    // 6. Rest des Handlers ab hier unverändert weiterführen
     // (PII redaction, cache lookup, cost tracking, metrics, sink write, response)
 
     // Generate cache key
@@ -174,6 +242,9 @@ pub async fn ingest_log(
 
         // Use inspect method to satisfy compiler dead code analysis
         let _ = cached.inspect();
+
+        // Record pii_hits in the span for cache hit case
+        tracing::Span::current().record("pii_hits", cached.pii_hits);
 
         // Calculate bytes and record cost
         let bytes = entry.message.len() as u64;
@@ -234,6 +305,9 @@ pub async fn ingest_log(
 
     // Cache MISS - run redaction
     let result = state.redactor.redact(&entry.message);
+
+    // Record pii_hits in the span
+    tracing::Span::current().record("pii_hits", result.hit_count);
 
     // Build cache entry
     let cache_entry = CacheEntry {
@@ -531,7 +605,63 @@ pub async fn ingest_log_batch(
             .into_response();
     }
 
-    // 3. Process each entry through the full pipeline
+    // 3. Check quota for tenant (batch counts as 1 request for quota purposes)
+    // Get rate limit from tenant config if tenant manager is available and tenant found by API key
+    let rate_limit = if let Some(tenant_manager) = &state.tenant_manager_client {
+        // Get API key from X-API-Key header
+        if let Some(api_key) = headers.get("X-API-Key").and_then(|v| v.to_str().ok()) {
+            match tenant_manager.find_by_api_key(api_key).await {
+                Ok(Some(tenant)) => {
+                    // Use tenant's rate limit
+                    tenant.rate_limit_per_sec
+                }
+                Ok(None) => {
+                    // Tenant not found, use default
+                    1000
+                }
+                Err(e) => {
+                    // Error querying tenant manager, log and use default
+                    tracing::warn!("Failed to query tenant manager: {}", e);
+                    1000
+                }
+            }
+        } else {
+            // No API key header, use default
+            1000
+        }
+    } else {
+        // No tenant manager, use default
+        1000
+    };
+    
+    // Generate a deterministic UUID from tenant_id string for quota tracking
+    let tenant_uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, tenant_id.as_bytes());
+    
+    match state.quota_manager.check_and_increment(tenant_uuid, rate_limit) {
+        crate::quota_manager::QuotaResult::Exceeded => {
+            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            state.metrics.record_duration(duration_ms);
+            state.metrics.record_quota_exceeded(tenant_id);
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({
+                    "error": "quota_exceeded",
+                    "hint": "rate limit exceeded, please try again later"
+                })),
+            )
+                .into_response();
+        }
+        crate::quota_manager::QuotaResult::SoftWarning { usage_pct: _ } => {
+            // Allow request but record warning metric
+            state.metrics.record_quota_warning(tenant_id);
+            // Continue processing...
+        }
+        crate::quota_manager::QuotaResult::Allowed => {
+            // Continue processing...
+        }
+    }
+
+    // 4. Process each entry through the full pipeline
     let mut results: Vec<BatchEntryResult> = Vec::with_capacity(entries_raw.len());
     let mut accepted = 0usize;
     let mut rejected = 0usize;
@@ -709,13 +839,16 @@ pub async fn trigger_s3_export(
                     status: "ok",
                 }),
             ),
-            Err(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ExportResponse {
-                    files_uploaded: 0,
-                    status: "error",
-                }),
-            ),
+            Err(_) => {
+                state.metrics.record_5xx();
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ExportResponse {
+                        files_uploaded: 0,
+                        status: "error",
+                    }),
+                )
+            }
         },
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -741,8 +874,14 @@ pub async fn trigger_s3_export(
         crate::alert_api::delete_rule_handler,
         crate::alert_api::list_active_alerts_handler,
         crate::alert_api::silence_alert_handler,
+        crate::alert_api::resolve_alert_handler,
         crate::alert_api::list_silences_handler,
-        crate::alert_api::expire_silence_handler
+        crate::alert_api::expire_silence_handler,
+        crate::tenant_api::list_tenants_handler,
+        crate::tenant_api::create_tenant_handler,
+        crate::tenant_api::update_tenant_handler,
+        crate::tenant_api::delete_tenant_handler,
+        crate::tenant_api::get_tenant_handler
     ),
     components(schemas(
         LogEntry, LogLevel, IngestResponse,
@@ -761,7 +900,11 @@ pub async fn trigger_s3_export(
         crate::alert_manager::AlertHistoryEntry,
         crate::alert_manager::SilenceCreate,
         crate::alert_manager::Silence,
-        crate::alert_api::AlertApiError
+        crate::alert_api::AlertApiError,
+        crate::tenant_manager::Tenant,
+        crate::tenant_manager::TenantCreate,
+        crate::tenant_manager::TenantUpdate,
+        crate::tenant_api::TenantApiError
     )),
     modifiers(&SecurityAddon),
     info(
@@ -811,11 +954,14 @@ mod tests {
             bgp_query_client: None,
             anomaly_detector: None,
             rpki_tx: None,
+            irr_cache: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
             alert_manager_client: None,
+            tenant_manager_client: None,
+            quota_manager: Arc::new(QuotaManager::new()),
         };
 
         // Build application
@@ -854,11 +1000,14 @@ mod tests {
             bgp_query_client: None,
             anomaly_detector: None,
             rpki_tx: None,
+            irr_cache: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
             alert_manager_client: None,
+            tenant_manager_client: None,
+            quota_manager: Arc::new(QuotaManager::new()),
         };
 
         // Build application
@@ -906,11 +1055,14 @@ mod tests {
             bgp_query_client: None,
             anomaly_detector: None,
             rpki_tx: None,
+            irr_cache: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
             alert_manager_client: None,
+            tenant_manager_client: None,
+            quota_manager: Arc::new(QuotaManager::new()),
         };
 
         // Build application
@@ -946,11 +1098,14 @@ mod tests {
             bgp_query_client: None,
             anomaly_detector: None,
             rpki_tx: None,
+            irr_cache: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
             alert_manager_client: None,
+            tenant_manager_client: None,
+            quota_manager: Arc::new(QuotaManager::new()),
         };
 
         let cost_tracker = app_state.cost_tracker.clone();
@@ -997,11 +1152,14 @@ mod tests {
             bgp_query_client: None,
             anomaly_detector: None,
             rpki_tx: None,
+            irr_cache: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
             alert_manager_client: None,
+            tenant_manager_client: None,
+            quota_manager: Arc::new(QuotaManager::new()),
         };
 
         let cost_tracker = app_state.cost_tracker.clone();
@@ -1043,11 +1201,14 @@ mod tests {
             bgp_query_client: None,
             anomaly_detector: None,
             rpki_tx: None,
+            irr_cache: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
             jwt_secret: None,
             alert_manager_client: None,
+            tenant_manager_client: None,
+            quota_manager: Arc::new(QuotaManager::new()),
         };
 
         let app = axum::Router::new()

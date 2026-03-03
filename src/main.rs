@@ -3,32 +3,145 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
 use log_gateway::config::GatewayConfig;
-use log_gateway::logging;
+use log_gateway::loki_logger;
 use log_gateway::s3_exporter::{S3Config, S3Exporter};
 use log_gateway::sink::StorageSink;
+use log_gateway::telemetry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+/// Initialize tracing with Loki support if enabled in config
+fn init_tracing_with_loki(config: &GatewayConfig) -> Result<()> {
+    // tokio-console: intercepts tracing events for async task inspection.
+    // Activate with: RUSTFLAGS="--cfg tokio_unstable" cargo run --features tokio-console
+    #[cfg(feature = "tokio-console")]
+    {
+        console_subscriber::init();
+        tracing::info!("tokio-console subscriber active on 127.0.0.1:6669");
+        // With tokio-console, we still want to add Loki layer if enabled
+        if config.loki.enabled {
+            if let Some((loki_layer, background_task)) = loki_logger::build_loki_layer(
+                &config.loki.endpoint,
+                &config.loki.service_name,
+            )? {
+                // Add Loki layer to existing subscriber
+                tracing::subscriber::set_global_default(
+                    tracing_subscriber::registry()
+                        .with(loki_layer)
+                )?;
+                // Spawn background task
+                tokio::spawn(background_task);
+                info!("Loki logging enabled with endpoint: {}", config.loki.endpoint);
+            } else {
+                info!("Loki logging disabled (invalid endpoint or empty)");
+            }
+        } else {
+            info!("Loki logging disabled via config");
+        }
+        return Ok(());
+    }
+    
+    // Standard initialization without tokio-console
+    let log_format = std::env::var("LOG_FORMAT").unwrap_or_else(|_| "text".to_string());
+    
+    // Create base subscriber based on LOG_FORMAT
+    let fmt_layer = match log_format.to_lowercase().as_str() {
+        "json" => {
+            fmt::layer()
+                .json()
+                .with_timer(fmt::time::UtcTime::rfc_3339())
+                .with_level(true)
+                .with_target(true)
+                .with_file(false)
+                .with_line_number(false)
+                .with_thread_ids(false)
+                .with_thread_names(false)
+                .boxed()
+        }
+        "text" => {
+            fmt::layer()
+                .with_timer(fmt::time::UtcTime::rfc_3339())
+                .with_level(true)
+                .with_target(true)
+                .boxed()
+        }
+        _ => {
+            tracing::warn!(
+                "Invalid LOG_FORMAT value '{}', using default text format",
+                log_format
+            );
+            fmt::layer()
+                .with_timer(fmt::time::UtcTime::rfc_3339())
+                .with_level(true)
+                .with_target(true)
+                .boxed()
+        }
+    };
+    
+    // Create env filter
+    let filter_layer = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info".into());
+    
+    // Start with registry and filter
+    let subscriber = tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer);
+    
+    // Add Loki layer if enabled
+    let loki_background_task = if config.loki.enabled {
+        match loki_logger::build_loki_layer(
+            &config.loki.endpoint,
+            &config.loki.service_name,
+        )? {
+            Some((loki_layer, background_task)) => {
+                info!("Loki logging enabled with endpoint: {}", config.loki.endpoint);
+                // Add Loki layer to subscriber
+                let subscriber = subscriber.with(loki_layer.boxed());
+                // Set as global default
+                tracing::subscriber::set_global_default(subscriber)
+                    .context("Failed to set global tracing subscriber")?;
+                Some(background_task)
+            }
+            None => {
+                info!("Loki logging disabled (invalid endpoint or empty)");
+                // Set subscriber without Loki layer
+                tracing::subscriber::set_global_default(subscriber)
+                    .context("Failed to set global tracing subscriber")?;
+                None
+            }
+        }
+    } else {
+        info!("Loki logging disabled via config");
+        // Set subscriber without Loki layer
+        tracing::subscriber::set_global_default(subscriber)
+            .context("Failed to set global tracing subscriber")?;
+        None
+    };
+    
+    // Spawn Loki background task if we have one
+    if let Some(background_task) = loki_background_task {
+        tokio::spawn(background_task);
+    }
+    
+    tracing::info!("Logging initialized with {} format", log_format);
+    Ok(())
+}
 
 // Worker thread count: Tokio reads TOKIO_WORKER_THREADS env var at startup.
 // For 16+ core servers set: TOKIO_WORKER_THREADS=16 (or 2× physical cores).
 // Default: number of logical CPUs (auto-detected by Tokio).
 #[tokio::main]
 async fn main() -> Result<()> {
-    // tokio-console: intercepts tracing events for async task inspection.
-    // Activate with: RUSTFLAGS="--cfg tokio_unstable" cargo run --features tokio-console
-    // Then connect with: tokio-console (listens on 127.0.0.1:6669 by default)
-    #[cfg(feature = "tokio-console")]
-    {
-        console_subscriber::init();
-        tracing::info!("tokio-console subscriber active on 127.0.0.1:6669");
-    }
-    #[cfg(not(feature = "tokio-console"))]
-    // Initialize tracing subscriber based on LOG_FORMAT environment variable
-    logging::init_tracing();
+    // Load configuration first (needed for Loki initialization)
+    let config = GatewayConfig::load()?;
+
+    // Initialize tracing with Loki support if enabled
+    init_tracing_with_loki(&config)?;
 
     // Log effective worker thread count for observability on production servers
     let worker_threads = std::env::var("TOKIO_WORKER_THREADS")
@@ -44,9 +157,6 @@ async fn main() -> Result<()> {
         "Tokio runtime: {} worker thread(s) (set TOKIO_WORKER_THREADS to override)",
         worker_threads
     );
-
-    // Load configuration
-    let config = GatewayConfig::load()?;
     let _config_rx = log_gateway::hot_reload::start_config_watcher();
     #[cfg(unix)]
     info!(
@@ -54,6 +164,15 @@ async fn main() -> Result<()> {
         std::process::id()
     );
     let addr = format!("{}:{}", config.server.host, config.server.port);
+
+    // Initialize OpenTelemetry tracer if enabled
+    if config.telemetry.enabled {
+        telemetry::init_tracer(&config.telemetry.service_name, Some(&config.telemetry.otlp_endpoint))
+            .context("Failed to initialize OpenTelemetry tracer")?;
+        info!("OpenTelemetry tracing enabled with endpoint: {}", config.telemetry.otlp_endpoint);
+    } else {
+        info!("OpenTelemetry tracing disabled");
+    }
 
     // Conditional logging based on config
     if config.cost.enabled {
@@ -196,6 +315,9 @@ async fn main() -> Result<()> {
                 if let Some(sink) = &shutdown_sink {
                     sink.flush_on_shutdown().await;
                 }
+
+                // Shutdown OpenTelemetry tracer
+                telemetry::shutdown_tracer();
             })
             .await?;
     }

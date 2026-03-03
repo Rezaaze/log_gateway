@@ -120,6 +120,7 @@ mod tests {
     use crate::cache::SemanticCache;
     use crate::cost_tracker::CostTracker;
     use crate::metrics::GatewayMetrics;
+    use crate::quota_manager::QuotaManager;
     use crate::redactor::Redactor;
 
     fn make_state(api_key: Option<&str>, jwt_secret: Option<&str>) -> AppState {
@@ -134,10 +135,14 @@ mod tests {
             bgp_query_client: None,
             anomaly_detector: None,
             rpki_tx: None,
+            irr_cache: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: api_key.map(|k| Arc::new(k.to_string())),
             jwt_secret: jwt_secret.map(|s| Arc::new(s.to_string())),
+            alert_manager_client: None,
+            tenant_manager_client: None,
+            quota_manager: Arc::new(QuotaManager::new()),
         }
     }
 

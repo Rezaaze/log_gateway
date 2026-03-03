@@ -14,27 +14,39 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub mod alert_api;
+pub mod alert_dedup;
 pub mod alert_manager;
 pub mod anomaly_detector;
+pub mod baseline_model;
 pub mod bgp_query;
 pub mod cache;
 pub mod clickhouse_exporter;
 pub mod config;
+pub mod cost_reporter;
 pub mod cost_tracker;
 pub mod escalation;
 pub mod handlers;
 pub mod hot_reload;
+pub mod irr_cache;
 pub mod logging;
+pub mod loki_logger;
 pub mod metrics;
 pub mod middleware;
+pub mod model_trainer;
 pub mod models;
+pub mod quota_manager;
 pub mod rate_limiter;
 pub mod redactor;
+pub mod roa_poller;
 pub mod rpki_cache;
 pub mod s3_exporter;
 pub mod schema_validator;
 pub mod secrets;
 pub mod sink;
+pub mod telemetry;
+pub mod tenant_manager;
+pub mod tenant_api;
+pub mod webhook;
 
 pub use anomaly_detector::AnomalyDetector;
 pub use cache::SemanticCache;
@@ -43,6 +55,7 @@ pub use config::{ClickHouseConfig, GatewayConfig};
 pub use cost_tracker::CostTracker;
 pub use handlers::AppState;
 pub use metrics::GatewayMetrics;
+pub use quota_manager::QuotaManager;
 pub use rate_limiter::new_tenant_limiter;
 pub use redactor::Redactor;
 pub use s3_exporter::{S3Config, S3Exporter};
@@ -55,6 +68,20 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
     let cache = SemanticCache::new(config.cache.max_capacity, config.cache.ttl_seconds);
     let cost_tracker = CostTracker::new();
     let metrics = GatewayMetrics::new();
+    metrics.record_gateway_up();
+
+    // Create and spawn cost reporter if SMTP is enabled
+    if config.smtp.enabled {
+        let cost_tracker_for_reporter = Arc::new(cost_tracker.clone());
+        let reporter = Arc::new(cost_reporter::CostReporter::new(
+            cost_tracker_for_reporter,
+            config.smtp.clone(),
+        ));
+        tokio::spawn(reporter.run_monthly());
+        tracing::info!("Monthly cost reporter task started (SMTP enabled)");
+    } else {
+        tracing::info!("SMTP reporting disabled, cost reporter not started");
+    }
 
     // Create storage sink if enabled
     let storage_sink = if config.sink.enabled {
@@ -129,9 +156,19 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         None
     };
 
+    // Create tenant manager client if ClickHouse is enabled
+    let tenant_manager_client = if config.clickhouse.enabled {
+        Some(Arc::new(crate::tenant_manager::TenantManagerClient::new(
+            config.clickhouse.url.clone(),
+            config.clickhouse.database.clone(),
+        )))
+    } else {
+        None
+    };
+
     // Create anomaly detector + alert channel
     let (alert_tx, alert_rx) = tokio::sync::mpsc::channel::<anomaly_detector::Anomaly>(1024);
-    let detector = anomaly_detector::AnomalyDetector::new(alert_tx);
+    let detector = anomaly_detector::AnomalyDetector::with_metrics(alert_tx, Arc::new(metrics.clone()));
 
     // Warmup HijackDetector from ClickHouse history if available
     if let Some(ref qclient) = bgp_query_client {
@@ -140,23 +177,89 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
 
     let anomaly_detector = Some(Arc::new(detector));
 
+    // Build webhook targets from config
+    let webhook_targets: Vec<crate::webhook::WebhookTarget> = if config.webhooks.enabled {
+        config.webhooks.targets.iter().filter_map(|t| {
+            match t.target_type.as_str() {
+                "slack" => {
+                    let channel = t.channel.clone().unwrap_or_else(|| "#alerts".to_string());
+                    Some(crate::webhook::WebhookTarget::Slack {
+                        url: t.url.clone(),
+                        channel,
+                    })
+                }
+                "generic" => {
+                    let headers = t.headers.clone().unwrap_or_default();
+                    Some(crate::webhook::WebhookTarget::Generic {
+                        url: t.url.clone(),
+                        headers,
+                    })
+                }
+                other => {
+                    tracing::warn!("Unknown webhook target_type '{}', skipping", other);
+                    None
+                }
+            }
+        }).collect()
+    } else {
+        Vec::new()
+    };
+
     // Create escalation router if alert manager and anomaly detector are available
     let escalation_router =
         if let (Some(ref am), Some(_)) = (&alert_manager_client, &anomaly_detector) {
-            Some(Arc::new(crate::escalation::EscalationRouter::new(
-                Arc::clone(am),
-                Arc::new(metrics.clone()),
-            )))
+            let router = if !webhook_targets.is_empty() {
+                match crate::escalation::EscalationRouter::with_webhooks(
+                    Arc::clone(am),
+                    Arc::new(metrics.clone()),
+                    webhook_targets,
+                ) {
+                    Ok(r) => {
+                        tracing::info!("EscalationRouter initialized with webhook support");
+                        r
+                    }
+                    Err(e) => {
+                        tracing::warn!("Webhook init failed, falling back to no-webhook router: {}", e);
+                        crate::escalation::EscalationRouter::new(
+                            Arc::clone(am),
+                            Arc::new(metrics.clone()),
+                        )
+                    }
+                }
+            } else {
+                crate::escalation::EscalationRouter::new(
+                    Arc::clone(am),
+                    Arc::new(metrics.clone()),
+                )
+            };
+            Some(Arc::new(router))
         } else {
             None
         };
 
+    // Spawn auto-escalation task if enabled
+    if config.escalation.auto_escalation_enabled {
+        if let (Some(ref router), Some(ref am)) = (&escalation_router, &alert_manager_client) {
+            tokio::spawn(crate::escalation::run_auto_escalation(
+                Arc::clone(am),
+                Arc::clone(router),
+                config.escalation.check_interval_secs,
+                config.escalation.timeout_secs,
+            ));
+            tracing::info!("Auto-escalation task started");
+        }
+    }
+
     // Spawn alert logger task
     let metrics_for_alerts = Arc::new(metrics.clone());
+    let reload_rx = hot_reload::reload_signal_rx();
     tokio::spawn(anomaly_detector::run_alert_logger(
         alert_rx,
         metrics_for_alerts,
         escalation_router,
+        alert_manager_client.clone(),
+        reload_rx,
+        None, // tenant_id from context/header (None at startup)
     ));
 
     // Create RPKI cache if enabled
@@ -167,6 +270,56 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
     } else {
         None
     };
+
+    // Create IRR cache if RPKI is enabled (IRR checking is always enabled when RPKI is enabled)
+    let irr_cache = if config.rpki.enabled {
+        Some(Arc::new(irr_cache::IrrCache::new()))
+    } else {
+        None
+    };
+
+    // Spawn RoaPoller if both RPKI and ClickHouse are enabled
+    if config.rpki.enabled && config.clickhouse.enabled {
+        // Use with_anomaly_sender if anomaly detector is available, otherwise use new()
+        let poller = if let Some(ref detector_arc) = anomaly_detector {
+            Arc::new(roa_poller::RoaPoller::with_anomaly_sender(
+                config.rpki.routinator_url.clone(),
+                config.clickhouse.url.clone(),
+                config.clickhouse.database.clone(),
+                detector_arc.alert_tx(),
+            ))
+        } else {
+            Arc::new(roa_poller::RoaPoller::new(
+                config.rpki.routinator_url.clone(),
+                config.clickhouse.url.clone(),
+                config.clickhouse.database.clone(),
+            ))
+        };
+        poller.start();
+        tracing::info!("RoaPoller started — polling every 5 minutes");
+    }
+
+    // Spawn daily model retraining task if ClickHouse is enabled and anomaly detection is active
+    if config.clickhouse.enabled {
+        if let Some(ref detector_arc) = anomaly_detector {
+            let baseline_arc = detector_arc.baseline_arc();
+            let trainer = Arc::new(model_trainer::ModelTrainer::new(
+                baseline_arc,
+                config.clickhouse.url.clone(),
+                config.clickhouse.database.clone(),
+                config.clickhouse.table.clone(),
+            ));
+            
+            // Load snapshot immediately on startup (before first training cycle)
+            let trainer_for_startup = Arc::clone(&trainer);
+            tokio::spawn(async move {
+                model_trainer::ModelTrainer::load_snapshot_on_startup(trainer_for_startup).await;
+            });
+            
+            tokio::spawn(model_trainer::ModelTrainer::run_daily(trainer));
+            tracing::info!("ModelTrainer daily retraining task spawned");
+        }
+    }
 
     // Spawn RPKI enrichment task if both RPKI and anomaly detection are enabled
     let rpki_tx = if let (Some(ref rpki), Some(ref detector_arc)) = (&rpki_cache, &anomaly_detector)
@@ -180,6 +333,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
             rpki_rx,
             hijack,
             Arc::clone(rpki),
+            irr_cache.clone(),
             alert_tx_clone,
             metrics_for_rpki,
         ));
@@ -203,6 +357,9 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
     let api_key = secrets::read_secret("gateway_api_key", "GATEWAY_API_KEY").map(Arc::new);
     let jwt_secret = secrets::read_secret("gateway_jwt_secret", "GATEWAY_JWT_SECRET").map(Arc::new);
 
+    // Create quota manager
+    let quota_manager = Arc::new(QuotaManager::new());
+
     // Create app state
     let app_state = AppState {
         redactor,
@@ -215,11 +372,14 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         bgp_query_client,
         anomaly_detector,
         rpki_tx,
+        irr_cache,
         sink_output_dir: PathBuf::from(&config.sink.output_dir),
         started_at: std::time::Instant::now(),
         api_key,
         jwt_secret,
         alert_manager_client,
+        tenant_manager_client,
+        quota_manager,
     };
 
     // Build protected routes with auth middleware (secrets come from AppState, no disk reads)
@@ -262,6 +422,28 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
             "/api/v1/alerts/active",
             get(alert_api::list_active_alerts_handler),
         )
+        .route(
+            "/api/v1/alerts/:id/silence",
+            post(alert_api::silence_alert_handler),
+        )
+        .route(
+            "/api/v1/alerts/:id/resolve",
+            post(alert_api::resolve_alert_handler),
+        )
+        .route(
+            "/api/v1/alerts/silences",
+            get(alert_api::list_silences_handler),
+        )
+        .route(
+            "/api/v1/alerts/silences/:id",
+            delete(alert_api::expire_silence_handler),
+        )
+        // Tenant API routes
+        .route("/api/v1/tenants", get(tenant_api::list_tenants_handler))
+        .route("/api/v1/tenants", post(tenant_api::create_tenant_handler))
+        .route("/api/v1/tenants/:id", get(tenant_api::get_tenant_handler))
+        .route("/api/v1/tenants/:id", put(tenant_api::update_tenant_handler))
+        .route("/api/v1/tenants/:id", delete(tenant_api::delete_tenant_handler))
         .route_layer(axum_middleware::from_fn_with_state(
             app_state.clone(),
             middleware::require_jwt,
@@ -312,6 +494,7 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
     let cache = SemanticCache::new(config.cache.max_capacity, config.cache.ttl_seconds);
     let cost_tracker = CostTracker::new();
     let metrics = GatewayMetrics::new();
+    metrics.record_gateway_up();
 
     // Create storage sink if enabled
     let storage_sink = if config.sink.enabled {
@@ -337,6 +520,9 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
         None
     };
 
+    // Create quota manager for tests
+    let quota_manager = Arc::new(QuotaManager::new());
+
     // Create app state (no secrets needed — test app has no auth middleware)
     let app_state = AppState {
         redactor,
@@ -349,11 +535,14 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
         bgp_query_client: None,
         anomaly_detector: None,
         rpki_tx: None,
+        irr_cache: None,
         sink_output_dir: PathBuf::from(&config.sink.output_dir),
         started_at: std::time::Instant::now(),
         api_key: None,
         jwt_secret: None,
         alert_manager_client: None,
+        tenant_manager_client: None,
+        quota_manager,
     };
 
     // Build protected routes WITHOUT auth middleware for tests

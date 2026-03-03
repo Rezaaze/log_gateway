@@ -440,7 +440,7 @@ pub async fn update_rule_handler(
 
     // Validate threshold if provided
     if let Some(threshold) = input.threshold {
-        if threshold < 0.0 || threshold > 1.0 {
+        if !(0.0..=1.0).contains(&threshold) {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(AlertApiError {
@@ -627,6 +627,99 @@ pub async fn list_active_alerts_handler(State(state): State<AppState>) -> impl I
                 }),
             )
                 .into_response()
+        }
+    }
+}
+
+/// POST /api/v1/alerts/:id/resolve
+#[utoipa::path(
+    post,
+    path = "/api/v1/alerts/{id}/resolve",
+    params(
+        ("id" = Uuid, Path, description = "Alert ID")
+    ),
+    responses(
+        (status = 200, description = "Alert resolved", body = AlertApiResponse<()>),
+        (status = 400, description = "Invalid UUID"),
+        (status = 404, description = "Alert not found"),
+        (status = 503, description = "Alert manager disabled"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("api_key" = []), ("bearer_auth" = []))
+)]
+pub async fn resolve_alert_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    // Parse UUID
+    let alert_id = match Uuid::parse_str(&id) {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(AlertApiError {
+                    error: format!("Invalid UUID: {}", e),
+                    status: "error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let client = match &state.alert_manager_client {
+        Some(client) => client,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AlertApiError {
+                    error: "alert_manager_disabled".to_string(),
+                    status: "error",
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match client.resolve_alert(alert_id).await {
+        Ok(()) => {
+            info!("Alert resolved: {}", alert_id);
+            
+            // Record false positive metric
+            // Note: In a real implementation, we would need to fetch the alert
+            // from ClickHouse to get its anomaly_type. For now, we use "unknown"
+            // as specified in the task description.
+            state.metrics.record_false_positive("unknown");
+            
+            (
+                StatusCode::OK,
+                Json(AlertApiResponse {
+                    data: (),
+                    status: "ok",
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            if e.to_string().contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(AlertApiError {
+                        error: format!("Alert not found: {}", e),
+                        status: "error",
+                    }),
+                )
+                    .into_response()
+            } else {
+                error!("Failed to resolve alert {}: {}", alert_id, e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(AlertApiError {
+                        error: format!("ClickHouse error: {}", e),
+                        status: "error",
+                    }),
+                )
+                    .into_response()
+            }
         }
     }
 }
