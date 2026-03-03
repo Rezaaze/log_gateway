@@ -164,7 +164,7 @@ services:
       - gateway_3
       - gateway_4
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8090' || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8404/stats || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
