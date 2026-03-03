@@ -68,7 +68,7 @@ services:
     depends_on:
       - clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -92,7 +92,7 @@ services:
     depends_on:
       - clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -116,7 +116,7 @@ services:
     depends_on:
       - clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -140,7 +140,7 @@ services:
     depends_on:
       - clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8080' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -159,14 +159,10 @@ services:
     networks:
       - gateway-net
     depends_on:
-      gateway_1:
-        condition: service_healthy
-      gateway_2:
-        condition: service_healthy
-      gateway_3:
-        condition: service_healthy
-      gateway_4:
-        condition: service_healthy
+      - gateway_1
+      - gateway_2
+      - gateway_3
+      - gateway_4
     healthcheck:
       test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
       interval: 10s
