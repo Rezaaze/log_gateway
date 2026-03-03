@@ -34,7 +34,7 @@ secret_access_key = ""
 delete_after_upload = false
 
 [clickhouse]
-enabled = true
+enabled = false
 url = "http://clickhouse:8123"
 database = "bgp"
 table = "bgp_events"
