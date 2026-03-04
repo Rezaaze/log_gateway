@@ -6,6 +6,7 @@ global:
 
 # Alerting rules configuration
 rule_files:
+  - "prometheus.rules.yml"
   - "alertmanager/alerts.yml"
 
 # Alertmanager configuration

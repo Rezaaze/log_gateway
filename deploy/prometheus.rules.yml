@@ -1,0 +1,162 @@
+groups:
+  - name: bgp_alerts
+    interval: 15s
+    rules:
+      # BGP Anomaly Detection: Prefix Flapping
+      - alert: BGPPrefixFlapping
+        expr: |
+          increase(gateway_bgp_anomalies_total{anomaly_type="PrefixFlapping"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          category: bgp
+        annotations:
+          summary: "BGP Prefix Flapping Detected"
+          description: "{{ $value | humanize }} prefix flapping events in the last 5 minutes"
+          runbook_url: "https://example.com/docs/bgp-flapping"
+
+      # BGP Anomaly Detection: Possible Hijack
+      - alert: BGPPossibleHijack
+        expr: |
+          increase(gateway_bgp_anomalies_total{anomaly_type="PossibleHijack"}[5m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+          category: bgp
+        annotations:
+          summary: "BGP Possible Hijack Detected"
+          description: "{{ $value | humanize }} possible BGP hijack events in the last 5 minutes"
+          runbook_url: "https://example.com/docs/bgp-hijack"
+
+      # BGP Anomaly Detection: Unusual Path
+      - alert: BGPUnusualPath
+        expr: |
+          increase(gateway_bgp_anomalies_total{anomaly_type="UnusualPath"}[5m]) > 50
+        for: 3m
+        labels:
+          severity: info
+          category: bgp
+        annotations:
+          summary: "BGP Unusual Path Detected"
+          description: "{{ $value | humanize }} unusual BGP path events in the last 5 minutes"
+
+      # ClickHouse Data Ingestion Failure
+      - alert: ClickHouseFlushFailed
+        expr: |
+          increase(gateway_clickhouse_flush_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          category: data
+        annotations:
+          summary: "ClickHouse Data Flush Failed"
+          description: "BGP events are not being written to ClickHouse ({{ $value | humanize }} errors in 5m)"
+          runbook_url: "https://example.com/docs/clickhouse-troubleshooting"
+
+      # RPKI Validation Errors
+      - alert: RPKIValidationErrors
+        expr: |
+          increase(gateway_rpki_errors_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+          category: rpki
+        annotations:
+          summary: "RPKI Validation Errors"
+          description: "High rate of RPKI validation errors ({{ $value | humanize }} errors in 5m)"
+
+      # BGP Events Rate Too High (potential overload)
+      - alert: BGPEventRateTooHigh
+        expr: |
+          rate(gateway_bgp_events_total[1m]) > 20000
+        for: 5m
+        labels:
+          severity: info
+          category: bgp
+        annotations:
+          summary: "BGP Event Rate High"
+          description: "BGP event rate is {{ $value | humanize }}/sec (normal: ~10-15k)"
+
+      # BGP Events Rate Too Low (potential data loss)
+      - alert: BGPEventRateTooLow
+        expr: |
+          rate(gateway_bgp_events_total[1m]) < 100
+        for: 5m
+        labels:
+          severity: warning
+          category: bgp
+        annotations:
+          summary: "BGP Event Rate Low"
+          description: "BGP event rate dropped to {{ $value | humanize }}/sec (normal: ~10-15k)"
+
+      # ClickHouse Storage Usage High
+      - alert: ClickHouseStorageHigh
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.10
+        for: 5m
+        labels:
+          severity: warning
+          category: storage
+        annotations:
+          summary: "Low Disk Space"
+          description: "Disk usage is {{ (100 - ($value * 100)) | humanize }}% (less than 10% free)"
+
+  - name: gateway_alerts
+    interval: 15s
+    rules:
+      # GatewayHighErrorRate — rate_limit_hits_total rate > 10/s für > 1min
+      - alert: GatewayHighErrorRate
+        expr: rate(gateway_rate_limit_hits_total[1m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limit hits detected"
+          description: "Gateway rate limit hits rate is {{ $value | humanize }}/sec (threshold: 10/s)"
+
+      # GatewayHighLatencyP99 — histogram_quantile(0.99) > 500ms für > 2min
+      - alert: GatewayHighLatencyP99
+        expr: histogram_quantile(0.99, rate(gateway_request_duration_ms_bucket[2m])) > 500
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency detected (p99 > 500ms)"
+          description: "Gateway request latency p99 is {{ $value | humanize }}ms (threshold: 500ms)"
+
+      # GatewayCacheHitRateLow — cache hit rate < 20% für > 5min
+      - alert: GatewayCacheHitRateLow
+        expr: |
+          (
+            rate(gateway_cache_hits_total[5m])
+            /
+            (rate(gateway_cache_hits_total[5m]) + rate(gateway_cache_misses_total[5m]))
+          ) * 100 < 20
+          and
+          (rate(gateway_cache_hits_total[5m]) + rate(gateway_cache_misses_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low cache hit rate detected"
+          description: "Gateway cache hit rate is {{ $value | humanize }}% (threshold: 20%)"
+
+      # GatewayHighPiiDetection — pii_hits rate > 50/s für > 1min
+      - alert: GatewayHighPiiDetection
+        expr: rate(gateway_pii_hits_total[1m]) > 50
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High PII detection rate"
+          description: "Gateway PII hits rate is {{ $value | humanize }}/sec (threshold: 50/s)"
+
+      # GatewayDown — up{job="log-gateway"} == 0 für > 30s
+      - alert: GatewayDown
+        expr: up{job="log-gateway"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway is down"
+          description: "Gateway service has been down for more than 30 seconds"
