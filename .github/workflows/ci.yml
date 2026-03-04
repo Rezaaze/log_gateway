@@ -148,8 +148,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_TIMESTAMP=${{ github.run_id }}-${{ github.run_number }}
-          cache-from: type=gha,scope=log-gateway
-          cache-to: type=gha,mode=max,scope=log-gateway
+          no-cache: true
 
       - name: Extract Docker metadata (bgp-stream)
         id: meta-bgp
