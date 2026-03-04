@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing;
 
 /// RPKI validation status for a BGP announcement.
@@ -13,15 +15,18 @@ pub enum RpkiStatus {
 }
 
 /// Caches RPKI validation results to avoid repeated queries to Routinator.
+/// Uses a semaphore to limit concurrent requests to Routinator (max 100).
 #[derive(Debug, Clone)]
 pub struct RpkiCache {
     cache: moka::sync::Cache<String, RpkiStatus>,
     client: reqwest::Client,
     routinator_url: String,
+    semaphore: Arc<Semaphore>, // Limit concurrent requests to 100
 }
 
 impl RpkiCache {
     /// Creates a new RPKI cache with the given Routinator URL.
+    /// Limits concurrent requests to Routinator to prevent 503 errors.
     pub fn new(routinator_url: String) -> Self {
         let cache = moka::sync::Cache::builder()
             .max_capacity(100_000)
@@ -36,10 +41,14 @@ impl RpkiCache {
                 reqwest::Client::new()
             });
 
+        // Semaphore with max 100 concurrent requests to Routinator
+        let semaphore = Arc::new(Semaphore::new(100));
+
         Self {
             cache,
             client,
             routinator_url,
+            semaphore,
         }
     }
 
@@ -47,11 +56,28 @@ impl RpkiCache {
     ///
     /// Returns `RpkiStatus::Unavailable` on any network error or non‑2xx response.
     /// Results are cached for 1 hour.
+    /// Uses semaphore to limit concurrent requests to 100 (prevents Routinator 503).
     pub async fn validate(&self, prefix: &str, origin_as: u32) -> RpkiStatus {
         let cache_key = format!("{}/{}", prefix, origin_as);
 
-        // Check cache first
+        // Check cache first (no semaphore needed for cache hits)
         if let Some(status) = self.cache.get(&cache_key) {
+            return status;
+        }
+
+        // Acquire semaphore permit (max 100 concurrent requests)
+        let _permit = self.semaphore.acquire().await;
+        let permit = match _permit {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("Failed to acquire semaphore for RPKI validation: {}", e);
+                return RpkiStatus::Unavailable;
+            }
+        };
+
+        // Double-check cache after acquiring permit (another request might have filled it)
+        if let Some(status) = self.cache.get(&cache_key) {
+            drop(permit); // Release permit early
             return status;
         }
 
@@ -69,6 +95,7 @@ impl RpkiCache {
                 tracing::warn!("RPKI validation request failed for {}: {}", cache_key, e);
                 let status = RpkiStatus::Unavailable;
                 self.cache.insert(cache_key, status.clone());
+                drop(permit); // Release permit
                 return status;
             }
         };
@@ -82,6 +109,7 @@ impl RpkiCache {
             );
             let status = RpkiStatus::Unavailable;
             self.cache.insert(cache_key, status.clone());
+            drop(permit); // Release permit
             return status;
         }
 
@@ -92,6 +120,7 @@ impl RpkiCache {
                 tracing::warn!("Failed to read RPKI response body for {}: {}", cache_key, e);
                 let status = RpkiStatus::Unavailable;
                 self.cache.insert(cache_key, status.clone());
+                drop(permit); // Release permit
                 return status;
             }
         };
@@ -103,6 +132,7 @@ impl RpkiCache {
                 tracing::warn!("Failed to parse RPKI JSON for {}: {}", cache_key, e);
                 let status = RpkiStatus::Unavailable;
                 self.cache.insert(cache_key, status.clone());
+                drop(permit); // Release permit
                 return status;
             }
         };
@@ -130,6 +160,7 @@ impl RpkiCache {
 
         // Cache the result
         self.cache.insert(cache_key, status.clone());
+        drop(permit); // Release permit
         status
     }
 }
