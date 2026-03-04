@@ -120,9 +120,26 @@ impl ClickHouseExporter {
         // Convert records to newline-delimited JSON
         let mut ndjson = String::with_capacity(count * 256); // ~256 bytes per record
         for record in &records {
-            match serde_json::to_string(record) {
-                Ok(json) => {
-                    ndjson.push_str(&json);
+            // Format timestamp as "YYYY-MM-DD HH:MM:SS" for ClickHouse DateTime compatibility
+            let timestamp_str = record.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+
+            // Manually construct JSON to ensure correct timestamp format
+            let json = serde_json::json!({
+                "timestamp": timestamp_str,
+                "event_type": record.event_type,
+                "prefix": record.prefix,
+                "origin_as": record.origin_as,
+                "as_path": record.as_path,
+                "peer_asn": record.peer_asn,
+                "peer_ip": record.peer_ip,
+                "community": record.community,
+                "source": record.source,
+                "tenant_id": record.tenant_id,
+            });
+
+            match serde_json::to_string(&json) {
+                Ok(json_str) => {
+                    ndjson.push_str(&json_str);
                     ndjson.push('\n');
                 }
                 Err(e) => {
