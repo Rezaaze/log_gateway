@@ -38,8 +38,8 @@ enabled = true
 url = "http://clickhouse:8123"
 database = "bgp"
 table = "bgp_events"
-batch_size = 1000
-flush_interval_secs = 5
+batch_size = 5000
+flush_interval_secs = 1
 
 [rpki]
 enabled = true
