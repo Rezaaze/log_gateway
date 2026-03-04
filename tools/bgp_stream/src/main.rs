@@ -312,13 +312,13 @@ fn process_ris_data(
                     source: "ripe-ris".into(),
                     message: format!("ANNOUNCE {pfx} via {peer_name} (path: {path_display})"),
                     metadata: Some(json!({
-                        "event":      "ANNOUNCE",
+                        "event_type": "announce",
                         "prefix":     pfx,
-                        "peer_asn":   peer_asn_raw.to_string(),
-                        "origin_asn": origin.to_string(),
-                        "origin":     origin_name,
-                        "nexthop":    nh,
-                        "timestamp":  ts_str,
+                        "peer_asn":   peer_asn_raw,
+                        "origin_as":  origin as u32,
+                        "peer_ip":    nh,
+                        "as_path":    path_vec.iter().map(|&a| a as u32).collect::<Vec<u32>>(),
+                        "community":  Vec::<String>::new(),
                     })),
                 };
 
@@ -349,13 +349,13 @@ fn process_ris_data(
                 source: "ripe-ris".into(),
                 message: format!("WITHDRAW {pfx} from {peer_name}"),
                 metadata: Some(json!({
-                    "event":      "WITHDRAW",
+                    "event_type": "withdraw",
                     "prefix":     pfx,
-                    "peer_asn":   peer_asn_raw.to_string(),
-                    "origin_asn": origin.to_string(),
-                    "origin":     origin_name,
-                    "nexthop":    "",
-                    "timestamp":  ts_str,
+                    "peer_asn":   peer_asn_raw,
+                    "origin_as":  origin as u32,
+                    "peer_ip":    "",
+                    "as_path":    path_vec.iter().map(|&a| a as u32).collect::<Vec<u32>>(),
+                    "community":  Vec::<String>::new(),
                 })),
             };
 
