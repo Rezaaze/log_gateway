@@ -195,7 +195,8 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./deploy/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus.rules.yml:/etc/prometheus/prometheus.rules.yml:ro
       - ./deploy/alertmanager:/etc/prometheus/alertmanager:ro
       - prometheus-data:/prometheus
     command:
