@@ -81,11 +81,10 @@ impl RpkiCache {
             return status;
         }
 
-        // URL-encode the prefix: replace "/" with "%2F"
-        let encoded_prefix = prefix.replace('/', "%2F");
+        // Build URL with prefix directly (Routinator expects unencoded prefix with "/")
         let url = format!(
             "{}/api/v1/validity/{}/{}",
-            self.routinator_url, origin_as, encoded_prefix
+            self.routinator_url, origin_as, prefix
         );
 
         // Make HTTP request with timeout
