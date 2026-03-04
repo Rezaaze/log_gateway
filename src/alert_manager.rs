@@ -272,12 +272,15 @@ impl AlertManagerClient {
 
     /// Executes a ClickHouse query that doesn't return rows.
     async fn execute(&self, sql: &str) -> Result<()> {
-        let url = self.build_url(sql);
+        let url = self.build_url();
+        let body = sql.to_string();
+        let content_length = body.len();
 
         let response = self
             .http
             .post(&url)
-            .body("")
+            .header("Content-Length", content_length.to_string())
+            .body(body)
             .send()
             .await
             .context("ClickHouse request failed")?;
@@ -295,12 +298,15 @@ impl AlertManagerClient {
 
     /// Executes a ClickHouse query and deserializes the JSONEachRow response.
     async fn query_json<T: serde::de::DeserializeOwned>(&self, sql: &str) -> Result<Vec<T>> {
-        let url = self.build_url(sql);
+        let url = self.build_url();
+        let body = sql.to_string();
+        let content_length = body.len();
 
         let response = self
             .http
             .post(&url)
-            .body("")
+            .header("Content-Length", content_length.to_string())
+            .body(body)
             .send()
             .await
             .context("ClickHouse request failed")?;
@@ -332,21 +338,11 @@ impl AlertManagerClient {
         Ok(results)
     }
 
-    /// Builds the ClickHouse HTTP API URL with URL-encoded query.
-    fn build_url(&self, sql: &str) -> String {
-        let encoded_query = sql
-            .replace('%', "%25") // must be first
-            .replace(' ', "%20")
-            .replace('\n', "%0A")
-            .replace('\t', "%09")
-            .replace('\'', "%27")
-            .replace('(', "%28")
-            .replace(')', "%29")
-            .replace('=', "%3D")
-            .replace(',', "%2C");
+    /// Builds the ClickHouse HTTP API base URL (SQL is sent as POST body).
+    fn build_url(&self) -> String {
         format!(
-            "{}/?database={}&default_format=JSONEachRow&query={}",
-            self.url, self.database, encoded_query
+            "{}/?database={}&default_format=JSONEachRow",
+            self.url, self.database
         )
     }
 }
@@ -449,11 +445,14 @@ impl AlertManagerClient {
             fingerprint.replace("'", "''")
         );
 
-        let url = self.build_url(&sql);
+        let url = self.build_url();
+        let body_str = sql.clone();
+        let content_length = body_str.len();
         let response = self
             .http
             .post(&url)
-            .body("")
+            .header("Content-Length", content_length.to_string())
+            .body(body_str)
             .send()
             .await
             .context("ClickHouse request failed")?;
