@@ -5,6 +5,7 @@ global:
     monitor: "log-gateway-cluster"
 
 rule_files:
+  - "prometheus.rules.yml"
   - "alertmanager/alerts.yml"
 
 alerting:
