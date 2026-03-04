@@ -1,6 +1,10 @@
 # ── Stage 1: Builder ─────────────────────────────────────────
 FROM rust:1-slim-bookworm AS builder
 
+# Cache-buster: pass BUILD_TIMESTAMP as --build-arg to invalidate cache on each build
+ARG BUILD_TIMESTAMP=unknown
+RUN echo "Building at ${BUILD_TIMESTAMP}"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
