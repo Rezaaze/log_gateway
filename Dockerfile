@@ -20,7 +20,10 @@ COPY benches/ ./benches/
 COPY config/ ./config/
 COPY tools/bgp_stream/src/ ./tools/bgp_stream/src/
 
-RUN cargo build --release --locked --package log-gateway
+# Force rebuild by touching source files - cache invalidation based on BUILD_TIMESTAMP
+RUN echo "Build timestamp: ${BUILD_TIMESTAMP}" && \
+    find ./src -type f -name "*.rs" -exec touch {} \; && \
+    cargo build --release --locked --package log-gateway
 
 # ── Stage 2: Runtime ─────────────────────────────────────────
 FROM debian:bookworm-slim
