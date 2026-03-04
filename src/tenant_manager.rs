@@ -310,10 +310,7 @@ impl TenantManagerClient {
 
     /// Builds the ClickHouse HTTP API base URL (SQL is sent as POST body).
     fn build_url(&self) -> String {
-        format!(
-            "{}/?database={}&default_format=JSON",
-            self.url, self.db
-        )
+        format!("{}/?database={}&default_format=JSON", self.url, self.db)
     }
 }
 
