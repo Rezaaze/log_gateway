@@ -270,7 +270,7 @@ jobs:
 
             # Cluster neu starten (nur geänderte Container werden neu gestartet)
             cd /root/log-gateway
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans
 
             # Health-Check: alle 4 Gateway-Instanzen und HAProxy müssen healthy sein (max 90s)
             for i in $(seq 1 30); do
