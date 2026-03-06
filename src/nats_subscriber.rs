@@ -7,7 +7,7 @@ This module provides NATS event subscription with:
 - Forwarding to detector channel
 */
 
-use async_nats::jetstream::consumer::{push, AckPolicy, DeliverPolicy};
+use async_nats::jetstream::consumer::{pull, AckPolicy, DeliverPolicy};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -158,7 +158,7 @@ pub async fn subscribe_bgp_events(
         };
 
         // Create JetStream context
-        let js = async_nats::jetstream::new(client.clone());
+        let js = async_nats::jetstream::new(client);
 
         // Get or create stream "BGP_EVENTS"
         let stream = match js.get_stream("BGP_EVENTS").await {
@@ -173,23 +173,23 @@ pub async fn subscribe_bgp_events(
             }
         };
 
-        // Create durable consumer configuration
-        let consumer_config = push::Config {
+        // Create durable pull consumer — required for WorkQueue streams (AckPolicy::Explicit)
+        // and for multi-instance deployment (all 4 gateways compete for the same messages).
+        let consumer_config = pull::Config {
             durable_name: Some("detector-group".to_string()),
             deliver_policy: DeliverPolicy::New,
             filter_subject: config.subject.clone(),
-            ack_policy: AckPolicy::None,
-            deliver_subject: client.new_inbox(),
+            ack_policy: AckPolicy::Explicit, // WorkQueue streams mandate explicit ack
             ..Default::default()
         };
 
-        // Get or create durable consumer
+        // Get or create durable pull consumer
         let consumer = match stream
             .get_or_create_consumer("detector-group", consumer_config)
             .await
         {
             Ok(c) => {
-                info!("Created/retrieved durable consumer 'detector-group'");
+                info!("Created/retrieved durable pull consumer 'detector-group'");
                 c
             }
             Err(e) => {
@@ -199,10 +199,10 @@ pub async fn subscribe_bgp_events(
             }
         };
 
-        // Get message stream from consumer
-        let mut messages = match consumer.messages().await {
+        // Stream messages continuously from pull consumer
+        let mut messages = match consumer.stream().messages().await {
             Ok(m) => {
-                info!("Listening for messages from durable consumer");
+                info!("Listening for messages from pull consumer 'detector-group'");
                 m
             }
             Err(e) => {
@@ -267,8 +267,14 @@ pub async fn subscribe_bgp_events(
                 }
                 Err(e) => {
                     error!("Failed to deserialize BgpEvent from NATS: {}", e);
-                    // Continue processing other messages
+                    // WorkQueue stream: ack even on parse errors to remove from queue
                 }
+            }
+
+            // Acknowledge message — required for WorkQueue streams (AckPolicy::Explicit).
+            // ACK removes the message from the stream after processing.
+            if let Err(e) = message.ack().await {
+                warn!("Failed to ack NATS message: {}", e);
             }
         }
 
