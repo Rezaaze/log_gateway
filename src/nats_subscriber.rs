@@ -141,7 +141,8 @@ pub async fn subscribe_bgp_events(
 
         let mut message_count: u64 = 0;
         let mut error_count: u64 = 0;
-        let last_stats_time = std::time::Instant::now();
+        let mut last_stats_time = std::time::Instant::now();
+        let mut last_stats_count: u64 = 0;
 
         // Consume messages until connection fails
         while let Some(message) = subscriber.next().await {
@@ -169,14 +170,18 @@ pub async fn subscribe_bgp_events(
                         }
                     }
 
-                    // Log stats every 10k messages
+                    // Log interval rate every 10k messages
                     if message_count.is_multiple_of(10000) {
                         let elapsed = last_stats_time.elapsed().as_secs_f64();
-                        let rate = message_count as f64 / elapsed;
+                        let interval_count = message_count - last_stats_count;
+                        let rate = interval_count as f64 / elapsed.max(0.001);
                         info!(
-                            "NATS subscription: {} events (rate: {:.0}/sec), errors: {}",
+                            "NATS subscription: {} events total (rate: {:.0}/sec), errors: {}",
                             message_count, rate, error_count
                         );
+                        // Reset interval counters for next window
+                        last_stats_time = std::time::Instant::now();
+                        last_stats_count = message_count;
                     }
                 }
                 Err(e) => {

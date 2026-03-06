@@ -41,6 +41,10 @@ x-gateway-env: &gateway-env
   GATEWAY__S3__ACCESS_KEY_ID: "minioadmin"
   GATEWAY__S3__SECRET_ACCESS_KEY: "minioadmin"
   GATEWAY__S3__DELETE_AFTER_UPLOAD: "false"
+  # NATS Streaming — Detector Runner (Bug-Fix: credentials + docker-net hostname)
+  GATEWAY__NATS__ENABLED: "true"
+  GATEWAY__NATS__URL: "nats://bgp-stream:bgp-stream@nats:4222"
+  GATEWAY__NATS__SUBJECT: "bgp.events"
 
 # ── Gemeinsame Volumes (YAML-Anker) ──────────────────────────────────────────
 x-gateway-volumes: &gateway-volumes
@@ -247,6 +251,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 5s
     restart: unless-stopped
 
   # ── BGP Stream (Rust) — RIPE NCC RIS Live → NATS ──────────────────────────────
@@ -262,7 +267,7 @@ services:
     image: ghcr.io/rezaaze/log_gateway/bgp-stream:latest
     container_name: bgp-stream
     environment:
-      NATS_URL:          "nats://nats:4222"           # NATS Jetstream
+      NATS_URL:          "nats://bgp-stream:bgp-stream@localhost:4222"  # host-net: localhost statt nats
       WORKERS:           "8"
       BATCH_SIZE:        "1000"                       # Größer möglich mit NATS (kein HTTP-Overhead)
       BATCH_TIMEOUT_MS:  "10"                         # Schneller möglich mit NATS

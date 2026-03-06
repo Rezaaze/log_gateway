@@ -89,6 +89,8 @@ from = "gateway@localhost"
 # to = ["admin@example.com"]
 
 [nats]
+# Enabled via GATEWAY__NATS__ENABLED env var in docker-compose.prod.yml
+# URL uses docker-net hostname "nats" + BGP-account credentials (see deploy/nats/nats.conf)
 enabled = false
-url = "nats://localhost:4222"
+url = "nats://bgp-stream:bgp-stream@nats:4222"
 subject = "bgp.events"
