@@ -377,10 +377,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         let detector_runner = Arc::new(match (&rpki_cache, &irr_cache) {
             (Some(rpki), Some(irr)) => {
                 tracing::info!("DetectorRunner: RPKI+IRR enrichment enabled");
-                detector_runner::DetectorRunner::with_enrichment(
-                    Arc::clone(rpki),
-                    Arc::clone(irr),
-                )
+                detector_runner::DetectorRunner::with_enrichment(Arc::clone(rpki), Arc::clone(irr))
             }
             _ => {
                 tracing::warn!("DetectorRunner: running without RPKI/IRR enrichment (enable RPKI in config for higher-confidence detection)");

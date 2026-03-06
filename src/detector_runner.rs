@@ -13,8 +13,10 @@ Phase 3b-3d Implementation Plan:
 */
 
 use crate::anomaly_detector::{Detector, FlappingDetector, HijackDetector};
+use crate::irr_cache::{IrrCache, IrrStatus};
 use crate::metrics_exporter::DetectorMetrics;
 use crate::nats_subscriber::BgpRecord;
+use crate::rpki_cache::{RpkiCache, RpkiStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -95,6 +97,10 @@ pub struct DetectorRunner {
     hijack_detector: Arc<HijackDetector>,
     /// FlappingDetector instance
     flapping_detector: Box<FlappingDetector>,
+    /// RPKI cache for validation (optional)
+    rpki_cache: Option<Arc<RpkiCache>>,
+    /// IRR cache for validation (optional)
+    irr_cache: Option<Arc<IrrCache>>,
 }
 
 impl std::fmt::Debug for DetectorRunner {
@@ -106,6 +112,22 @@ impl std::fmt::Debug for DetectorRunner {
             .field("metrics", &self.metrics)
             .field("hijack_detector", &"Arc<HijackDetector>")
             .field("flapping_detector", &"Box<FlappingDetector>")
+            .field(
+                "rpki_cache",
+                &if self.rpki_cache.is_some() {
+                    "Some(RpkiCache)"
+                } else {
+                    "None"
+                },
+            )
+            .field(
+                "irr_cache",
+                &if self.irr_cache.is_some() {
+                    "Some(IrrCache)"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -125,6 +147,8 @@ impl DetectorRunner {
             metrics: Arc::new(DetectorMetrics::new()),
             hijack_detector: Arc::new(HijackDetector::new()),
             flapping_detector: Box::new(FlappingDetector::new()),
+            rpki_cache: None,
+            irr_cache: None,
         }
     }
 
@@ -137,6 +161,22 @@ impl DetectorRunner {
             metrics,
             hijack_detector: Arc::new(HijackDetector::new()),
             flapping_detector: Box::new(FlappingDetector::new()),
+            rpki_cache: None,
+            irr_cache: None,
+        }
+    }
+
+    /// Create with RPKI and IRR enrichment caches
+    pub fn with_enrichment(rpki: Arc<RpkiCache>, irr: Arc<IrrCache>) -> Self {
+        Self {
+            events_processed: Arc::new(AtomicU64::new(0)),
+            anomalies_detected: Arc::new(AtomicU64::new(0)),
+            errors: Arc::new(AtomicU64::new(0)),
+            metrics: Arc::new(DetectorMetrics::new()),
+            hijack_detector: Arc::new(HijackDetector::new()),
+            flapping_detector: Box::new(FlappingDetector::new()),
+            rpki_cache: Some(rpki),
+            irr_cache: Some(irr),
         }
     }
 
@@ -236,20 +276,7 @@ impl DetectorRunner {
         // Convert BgpRecord to BgpClickHouseRecord format expected by detectors
         let bgp_record = self.convert_to_detector_format(record);
 
-        // Run HijackDetector
-        if let Some(anomaly) = self.hijack_detector.check(&bgp_record) {
-            self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
-            self.metrics.record_anomaly("hijack");
-            tracing::warn!(
-                "Hijack detected: prefix={}, origin_as={}, confidence={:.2}, details={}",
-                anomaly.prefix,
-                anomaly.origin_as,
-                anomaly.confidence,
-                anomaly.details
-            );
-        }
-
-        // Run FlappingDetector
+        // Run FlappingDetector (no RPKI/IRR needed for flapping detection)
         if let Some(anomaly) = self.flapping_detector.check(&bgp_record) {
             self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
             self.metrics.record_anomaly("flapping");
@@ -259,6 +286,69 @@ impl DetectorRunner {
                 anomaly.confidence,
                 anomaly.details
             );
+        }
+
+        // Run HijackDetector with RPKI/IRR enrichment if available
+        if let Some(rpki_cache) = &self.rpki_cache {
+            // Only check ANNOUNCE events for RPKI validation
+            if record.event_type == "announce" {
+                // a) Get RPKI status
+                let rpki_status: RpkiStatus = rpki_cache
+                    .validate(&bgp_record.prefix, bgp_record.origin_as)
+                    .await;
+
+                // b) Get IRR status if cache available
+                let irr_status = if let Some(irr_cache) = &self.irr_cache {
+                    irr_cache
+                        .check(&bgp_record.prefix, bgp_record.origin_as)
+                        .await
+                } else {
+                    IrrStatus::Unavailable
+                };
+
+                // c) Check for anomaly with RPKI and IRR status
+                if let Some(anomaly) = self.hijack_detector.check_with_rpki_status(
+                    &bgp_record,
+                    rpki_status,
+                    &irr_status,
+                ) {
+                    self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
+                    self.metrics.record_anomaly("hijack");
+                    tracing::warn!(
+                        "Hijack detected with RPKI/IRR: prefix={}, origin_as={}, confidence={:.2}, details={}",
+                        anomaly.prefix,
+                        anomaly.origin_as,
+                        anomaly.confidence,
+                        anomaly.details
+                    );
+                }
+            } else {
+                // For WITHDRAW events, use basic hijack detection without RPKI
+                if let Some(anomaly) = self.hijack_detector.check(&bgp_record) {
+                    self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
+                    self.metrics.record_anomaly("hijack");
+                    tracing::warn!(
+                        "Hijack detected (withdraw event): prefix={}, origin_as={}, confidence={:.2}, details={}",
+                        anomaly.prefix,
+                        anomaly.origin_as,
+                        anomaly.confidence,
+                        anomaly.details
+                    );
+                }
+            }
+        } else {
+            // No RPKI cache available, use basic hijack detection
+            if let Some(anomaly) = self.hijack_detector.check(&bgp_record) {
+                self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
+                self.metrics.record_anomaly("hijack");
+                tracing::warn!(
+                    "Hijack detected (no RPKI): prefix={}, origin_as={}, confidence={:.2}, details={}",
+                    anomaly.prefix,
+                    anomaly.origin_as,
+                    anomaly.confidence,
+                    anomaly.details
+                );
+            }
         }
 
         Ok(())
