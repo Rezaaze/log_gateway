@@ -23,6 +23,7 @@ Env vars (all optional)
 use async_channel::{bounded, Receiver, Sender, TrySendError};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
+use rustls::RootCertStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -42,7 +43,6 @@ use tokio_tungstenite::{
 };
 use tracing::{error, info, warn};
 use uuid::Uuid;
-use rustls::RootCertStore;
 
 // ── Local model types (mirrors log-gateway API contract) ──────────────────────
 
@@ -527,6 +527,27 @@ async fn stats_task(stats: Arc<Stats>, cfg: Arc<Config>, start: Instant, chan_ca
     }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Parse a NATS URL and extract credentials and clean server URL.
+///
+/// Handles `nats://user:pass@host:port` or `nats://host:port`.
+/// Returns `(clean_url, Option<(username, password)>)`.
+fn parse_nats_url(url: &str) -> (String, Option<(String, String)>) {
+    if let Some(at_pos) = url.rfind('@') {
+        let scheme_end = url.find("://").map(|i| i + 3).unwrap_or(0);
+        let creds = &url[scheme_end..at_pos];
+        let clean_url = format!("{}{}", &url[..scheme_end], &url[at_pos + 1..]);
+        if let Some(colon_pos) = creds.find(':') {
+            let user = creds[..colon_pos].to_string();
+            let pass = creds[colon_pos + 1..].to_string();
+            return (clean_url, Some((user, pass)));
+        }
+        return (clean_url, None);
+    }
+    (url.to_string(), None)
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -559,7 +580,15 @@ async fn main() {
     println!("{}", "=".repeat(65));
 
     // Connect to NATS
-    let nats_client = match async_nats::connect(&cfg.nats_url).await {
+    // async-nats 0.34 does not extract credentials from the URL automatically —
+    // parse user:pass from URL and use ConnectOptions::user_and_password() instead.
+    let (clean_nats_url, nats_creds) = parse_nats_url(&cfg.nats_url);
+    let connect_opts = if let Some((user, pass)) = nats_creds {
+        async_nats::ConnectOptions::new().user_and_password(user, pass)
+    } else {
+        async_nats::ConnectOptions::new()
+    };
+    let nats_client = match connect_opts.connect(&clean_nats_url).await {
         Ok(client) => {
             info!("Connected to NATS at {}", cfg.nats_url);
             client
@@ -579,7 +608,7 @@ async fn main() {
         subjects: vec!["bgp.events".to_string()],
         retention: async_nats::jetstream::stream::RetentionPolicy::WorkQueue,
         max_age: std::time::Duration::from_secs(86400), // 24 hours
-        max_bytes: 500 * 1024 * 1024, // 500 MB
+        max_bytes: 500 * 1024 * 1024,                   // 500 MB
         storage: async_nats::jetstream::stream::StorageType::File,
         ..Default::default()
     };

@@ -7,6 +7,7 @@ This module provides NATS event subscription with:
 - Forwarding to detector channel
 */
 
+use async_nats::jetstream::consumer::{push, AckPolicy, DeliverPolicy};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -89,10 +90,30 @@ pub fn extract_bgp_record(event: &BgpEvent) -> Option<BgpRecord> {
     })
 }
 
-/// Subscribe to BGP events from NATS
+/// Parse a NATS URL and extract credentials and clean server URL.
 ///
-/// Connects to NATS, subscribes to bgp.events subject, and forwards
-/// deserialized BGP records to the detector channel.
+/// Handles URLs of the form `nats://user:pass@host:port` or `nats://host:port`.
+/// Returns (clean_url_without_credentials, Option<(username, password)>).
+fn parse_nats_url(url: &str) -> (String, Option<(String, String)>) {
+    if let Some(at_pos) = url.rfind('@') {
+        let scheme_end = url.find("://").map(|i| i + 3).unwrap_or(0);
+        let creds = &url[scheme_end..at_pos];
+        let clean_url = format!("{}{}", &url[..scheme_end], &url[at_pos + 1..]);
+        if let Some(colon_pos) = creds.find(':') {
+            let user = creds[..colon_pos].to_string();
+            let pass = creds[colon_pos + 1..].to_string();
+            return (clean_url, Some((user, pass)));
+        }
+        return (clean_url, None);
+    }
+    (url.to_string(), None)
+}
+
+/// Subscribe to BGP events from NATS JetStream
+///
+/// Connects to NATS, creates JetStream context, and subscribes to
+/// durable consumer "detector-group" on stream "BGP_EVENTS".
+/// Forwards deserialized BGP records to the detector channel.
 ///
 /// This function runs indefinitely with automatic reconnection.
 /// Returns Ok() only if detector channel closes.
@@ -101,6 +122,9 @@ pub async fn subscribe_bgp_events(
     tx: mpsc::Sender<BgpRecord>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut retry_count = 0;
+    // async-nats 0.34 does not extract credentials from the URL automatically —
+    // use ConnectOptions::user_and_password() instead.
+    let (clean_url, creds) = parse_nats_url(&config.nats_url);
 
     loop {
         info!(
@@ -109,8 +133,15 @@ pub async fn subscribe_bgp_events(
             retry_count + 1
         );
 
+        // Build ConnectOptions with explicit credentials when present
+        let connect_opts = if let Some((ref user, ref pass)) = creds {
+            async_nats::ConnectOptions::new().user_and_password(user.clone(), pass.clone())
+        } else {
+            async_nats::ConnectOptions::new()
+        };
+
         // Connect to NATS
-        let client = match async_nats::connect(&config.nats_url).await {
+        let client = match connect_opts.connect(&clean_url).await {
             Ok(c) => {
                 info!("Connected to NATS successfully");
                 retry_count = 0; // Reset on successful connection
@@ -126,14 +157,56 @@ pub async fn subscribe_bgp_events(
             }
         };
 
-        // Subscribe to subject
-        let mut subscriber = match client.subscribe(config.subject.clone()).await {
+        // Create JetStream context
+        let js = async_nats::jetstream::new(client.clone());
+
+        // Get or create stream "BGP_EVENTS"
+        let stream = match js.get_stream("BGP_EVENTS").await {
             Ok(s) => {
-                info!("Subscribed to subject: {}", config.subject);
+                info!("Found JetStream stream 'BGP_EVENTS'");
                 s
             }
             Err(e) => {
-                error!("Failed to subscribe to {}: {}", config.subject, e);
+                error!("Failed to get stream 'BGP_EVENTS': {}", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+
+        // Create durable consumer configuration
+        let consumer_config = push::Config {
+            durable_name: Some("detector-group".to_string()),
+            deliver_policy: DeliverPolicy::New,
+            filter_subject: config.subject.clone(),
+            ack_policy: AckPolicy::None,
+            deliver_subject: client.new_inbox(),
+            ..Default::default()
+        };
+
+        // Get or create durable consumer
+        let consumer = match stream
+            .get_or_create_consumer("detector-group", consumer_config)
+            .await
+        {
+            Ok(c) => {
+                info!("Created/retrieved durable consumer 'detector-group'");
+                c
+            }
+            Err(e) => {
+                error!("Failed to create consumer 'detector-group': {}", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+
+        // Get message stream from consumer
+        let mut messages = match consumer.messages().await {
+            Ok(m) => {
+                info!("Listening for messages from durable consumer");
+                m
+            }
+            Err(e) => {
+                error!("Failed to get messages from consumer: {}", e);
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
@@ -145,7 +218,15 @@ pub async fn subscribe_bgp_events(
         let mut last_stats_count: u64 = 0;
 
         // Consume messages until connection fails
-        while let Some(message) = subscriber.next().await {
+        while let Some(msg_result) = messages.next().await {
+            let message = match msg_result {
+                Ok(m) => m,
+                Err(e) => {
+                    error!("Error receiving message from JetStream: {}", e);
+                    break; // Break out of message loop to reconnect
+                }
+            };
+
             // Try to deserialize as BgpEvent
             match serde_json::from_slice::<BgpEvent>(&message.payload) {
                 Ok(event) => {
@@ -176,7 +257,7 @@ pub async fn subscribe_bgp_events(
                         let interval_count = message_count - last_stats_count;
                         let rate = interval_count as f64 / elapsed.max(0.001);
                         info!(
-                            "NATS subscription: {} events total (rate: {:.0}/sec), errors: {}",
+                            "JetStream subscription: {} events total (rate: {:.0}/sec), errors: {}",
                             message_count, rate, error_count
                         );
                         // Reset interval counters for next window
@@ -192,7 +273,7 @@ pub async fn subscribe_bgp_events(
         }
 
         warn!(
-            "NATS subscription ended (processed {} events), reconnecting in 5s",
+            "JetStream subscription ended (processed {} events), reconnecting in 5s",
             message_count
         );
         tokio::time::sleep(Duration::from_secs(5)).await;
