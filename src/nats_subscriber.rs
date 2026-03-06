@@ -175,9 +175,10 @@ pub async fn subscribe_bgp_events(
 
         // Create durable pull consumer — required for WorkQueue streams (AckPolicy::Explicit)
         // and for multi-instance deployment (all 4 gateways compete for the same messages).
+        // WorkQueue streams also require DeliverPolicy::All (error 10101 with ::New).
         let consumer_config = pull::Config {
             durable_name: Some("detector-group".to_string()),
-            deliver_policy: DeliverPolicy::New,
+            deliver_policy: DeliverPolicy::All,
             filter_subject: config.subject.clone(),
             ack_policy: AckPolicy::Explicit, // WorkQueue streams mandate explicit ack
             ..Default::default()
