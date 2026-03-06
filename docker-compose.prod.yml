@@ -231,7 +231,7 @@ services:
   # Message Streaming für BGP-Events
   # Web UI: http://localhost:8222
   nats:
-    image: nats:latest
+    image: nats:alpine          # Alpine variant – has wget + sh for healthcheck
     container_name: nats
     ports:
       - "4222:4222"     # NATS Protocol
@@ -243,7 +243,7 @@ services:
     networks:
       - gateway-net
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/4222' || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8222/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
