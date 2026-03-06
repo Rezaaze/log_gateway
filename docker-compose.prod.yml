@@ -242,6 +242,11 @@ services:
     command: -c /etc/nats/nats.conf
     networks:
       - gateway-net
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/4222' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
   # ── BGP Stream (Rust) — RIPE NCC RIS Live → NATS ──────────────────────────────
