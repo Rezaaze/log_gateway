@@ -373,8 +373,20 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         let (detector_tx, detector_rx) =
             tokio::sync::mpsc::channel::<crate::nats_subscriber::BgpRecord>(64000);
 
-        // Create detector runner with metrics
-        let detector_runner = Arc::new(detector_runner::DetectorRunner::new());
+        // Create detector runner — with RPKI/IRR enrichment if both caches are available
+        let detector_runner = Arc::new(match (&rpki_cache, &irr_cache) {
+            (Some(rpki), Some(irr)) => {
+                tracing::info!("DetectorRunner: RPKI+IRR enrichment enabled");
+                detector_runner::DetectorRunner::with_enrichment(
+                    Arc::clone(rpki),
+                    Arc::clone(irr),
+                )
+            }
+            _ => {
+                tracing::warn!("DetectorRunner: running without RPKI/IRR enrichment (enable RPKI in config for higher-confidence detection)");
+                detector_runner::DetectorRunner::new()
+            }
+        });
 
         // Clone for task
         let detector_runner_clone = Arc::clone(&detector_runner);

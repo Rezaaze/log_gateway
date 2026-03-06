@@ -75,6 +75,7 @@ struct Config {
     workers: usize,
     batch_size: usize,
     batch_timeout: Duration,
+    #[allow(dead_code)] // reserved for future NATS metadata tagging
     tenant_id: String,
     sample_rate: f64,
     channel_cap: usize,
@@ -207,7 +208,7 @@ fn process_ris_data(
             .as_secs_f64()
     });
 
-    let ts_str = chrono::DateTime::<Utc>::from_timestamp(ts as i64, 0)
+    let _ts_str = chrono::DateTime::<Utc>::from_timestamp(ts as i64, 0)
         .unwrap_or_else(Utc::now)
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
@@ -223,7 +224,7 @@ fn process_ris_data(
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("AS{peer_asn_raw}"));
 
-    let origin_name = known
+    let _origin_name = known
         .get(&origin)
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("AS{origin}"));
@@ -330,7 +331,7 @@ fn process_ris_data(
 async fn nats_publisher_task(
     id: usize,
     rx: Receiver<BgpEvent>,
-    nats_client: async_nats::Client,
+    js_context: async_nats::jetstream::Context,
     cfg: Arc<Config>,
     stats: Arc<Stats>,
 ) {
@@ -363,9 +364,9 @@ async fn nats_publisher_task(
             continue;
         }
 
-        let n = batch.len();
+        let _batch_len = batch.len(); // telemetry placeholder
 
-        // Publish each event to NATS
+        // Publish each event to NATS JetStream
         for event in batch.drain(..) {
             let json_bytes = match serde_json::to_vec(&event) {
                 Ok(b) => b,
@@ -376,12 +377,12 @@ async fn nats_publisher_task(
                 }
             };
 
-            match nats_client.publish(subject, json_bytes.into()).await {
+            match js_context.publish(subject, json_bytes.into()).await {
                 Ok(_) => {
                     stats.published.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(e) => {
-                    error!(worker = id, subject = subject, error = %e, "NATS publish failed");
+                    error!(worker = id, subject = subject, error = %e, "JetStream publish failed");
                     stats.errors.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -569,6 +570,30 @@ async fn main() {
         }
     };
 
+    // Create JetStream context
+    let js = async_nats::jetstream::new(nats_client.clone());
+
+    // Create or get the BGP_EVENTS stream
+    let stream_config = async_nats::jetstream::stream::Config {
+        name: "BGP_EVENTS".to_string(),
+        subjects: vec!["bgp.events".to_string()],
+        retention: async_nats::jetstream::stream::RetentionPolicy::WorkQueue,
+        max_age: std::time::Duration::from_secs(86400), // 24 hours
+        max_bytes: 500 * 1024 * 1024, // 500 MB
+        storage: async_nats::jetstream::stream::StorageType::File,
+        ..Default::default()
+    };
+
+    match js.get_or_create_stream(stream_config).await {
+        Ok(_stream) => {
+            info!("JetStream stream 'BGP_EVENTS' ready (subjects: bgp.events)");
+        }
+        Err(e) => {
+            error!("Failed to create/get JetStream stream: {e}");
+            std::process::exit(1);
+        }
+    }
+
     // Bounded channel: WebSocket producer → NATS publishers
     let (tx, rx) = bounded::<BgpEvent>(cfg.channel_cap);
 
@@ -577,11 +602,11 @@ async fn main() {
     // Spawn NATS publisher workers
     for i in 0..cfg.workers {
         let rx_i = rx.clone();
-        let client_i = nats_client.clone();
+        let js_i = js.clone();
         let cfg_i = cfg.clone();
         let stats_i = stats.clone();
         tokio::spawn(async move {
-            nats_publisher_task(i, rx_i, client_i, cfg_i, stats_i).await;
+            nats_publisher_task(i, rx_i, js_i, cfg_i, stats_i).await;
         });
     }
 
