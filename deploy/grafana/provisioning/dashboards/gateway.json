@@ -1,7 +1,7 @@
 {
   "title": "Log Gateway",
   "uid": "log-gateway-main",
-  "version": 3,
+  "version": 4,
   "refresh": "5s",
   "time": { "from": "now-15m", "to": "now" },
   "schemaVersion": 38,
@@ -196,32 +196,135 @@
     },
     {
       "id": 18,
-      "title": "BGP Intelligence",
+      "title": "BGP Intelligence — NATS Streaming",
       "type": "row",
       "gridPos": { "x": 0, "y": 36, "w": 24, "h": 1 },
       "collapsed": false
     },
     {
-      "id": 12,
-      "title": "BGP Events/s",
-      "type": "timeseries",
-      "gridPos": { "x": 0, "y": 36, "w": 12, "h": 8 },
+      "id": 19,
+      "title": "BGP Events/s (alle Gateways)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 37, "w": 6, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(gateway_requests_total[1m])",
-          "legendFormat": "Total"
-        },
+          "expr": "sum(rate(detector_events_processed_total_total[1m]))",
+          "legendFormat": "events/s"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "title": "Hijacks erkannt (gesamt)",
+      "type": "stat",
+      "gridPos": { "x": 6, "y": 37, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(gateway_bgp_anomaly_hijack_total[1m])",
+          "expr": "sum(detector_anomalies_detected_total_total{type=\"hijack\"})",
           "legendFormat": "Hijacks"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "Flapping erkannt (gesamt)",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 37, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(detector_anomalies_detected_total_total{type=\"flapping\"})",
+          "legendFormat": "Flapping"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "Processing Errors",
+      "type": "stat",
+      "gridPos": { "x": 18, "y": 37, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(detector_processing_errors_total_total)",
+          "legendFormat": "Errors"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "BGP Events/s pro Gateway (NATS)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 41, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(detector_events_processed_total_total[1m]))",
+          "legendFormat": "Total events/s"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(gateway_bgp_anomaly_flap_total[1m])",
-          "legendFormat": "Flapping"
+          "expr": "sum(rate(detector_anomalies_detected_total_total{type=\"hijack\"}[1m]))",
+          "legendFormat": "Hijacks/s"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(detector_anomalies_detected_total_total{type=\"flapping\"}[1m]))",
+          "legendFormat": "Flapping/s"
         }
       ],
       "fieldConfig": {
@@ -235,17 +338,17 @@
       "id": 13,
       "title": "RPKI Status",
       "type": "piechart",
-      "gridPos": { "x": 12, "y": 36, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 41, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "gateway_rpki_valid_total",
+          "expr": "sum(gateway_rpki_valid_total)",
           "legendFormat": "Valid"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "gateway_rpki_invalid_total",
+          "expr": "sum(gateway_rpki_invalid_total)",
           "legendFormat": "Invalid"
         }
       ],
@@ -272,20 +375,20 @@
     },
     {
       "id": 14,
-      "title": "BGP Hijack Erkennungen",
+      "title": "BGP Hijack Erkennungen (5min)",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 44, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 49, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "increase(gateway_bgp_anomaly_hijack_total[5m])",
+          "expr": "sum(increase(detector_anomalies_detected_total_total{type=\"hijack\"}[5m]))",
           "legendFormat": "Hijacks"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": { "mode": "fixed", "fixedColor": "red" },
           "unit": "short",
           "thresholds": {
             "mode": "absolute",
@@ -300,40 +403,35 @@
     },
     {
       "id": 15,
-      "title": "Prefix Flapping Ereignisse",
+      "title": "Prefix Flapping Ereignisse (5min)",
       "type": "timeseries",
-      "gridPos": { "x": 12, "y": 44, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 49, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "increase(gateway_bgp_anomaly_flap_total[5m])",
+          "expr": "sum(increase(detector_anomalies_detected_total_total{type=\"flapping\"}[5m]))",
           "legendFormat": "Flapping"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": { "mode": "fixed", "fixedColor": "orange" },
           "unit": "short"
         }
       }
     },
     {
       "id": 16,
-      "title": "RPKI Validierungsrate",
+      "title": "Detektor Load – Events/s je Gateway",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 52, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 57, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(gateway_rpki_valid_total[5m])",
-          "legendFormat": "Valid/s"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(gateway_rpki_invalid_total[5m])",
-          "legendFormat": "Invalid/s"
+          "expr": "rate(detector_events_processed_total_total[1m])",
+          "legendFormat": "{{instance}}"
         }
       ],
       "fieldConfig": {
@@ -345,14 +443,14 @@
     },
     {
       "id": 17,
-      "title": "Aktive Anomalien (gesamt)",
+      "title": "Aktive Anomalien gesamt",
       "type": "stat",
-      "gridPos": { "x": 12, "y": 52, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 57, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "gateway_bgp_anomaly_hijack_total + gateway_bgp_anomaly_flap_total",
+          "expr": "sum(detector_anomalies_detected_total_total)",
           "legendFormat": "Total Anomalies"
         }
       ],
@@ -364,8 +462,8 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "orange", "value": 1 },
-              { "color": "red", "value": 10 }
+              { "color": "orange", "value": 1000 },
+              { "color": "red", "value": 10000 }
             ]
           }
         }
