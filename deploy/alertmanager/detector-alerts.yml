@@ -1,0 +1,112 @@
+groups:
+  - name: bgp_detector_alerts
+    interval: 30s
+    rules:
+      # Critical: No events being processed
+      - alert: DetectorNoEventsProcessed
+        expr: rate(detector_events_processed_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: detector
+        annotations:
+          summary: "BGP Detector: No events processed"
+          description: "The detector has not processed any BGP events in the last 5 minutes. NATS subscription may be down."
+          runbook_url: "https://github.com/Rezaaze/log_gateway/wiki/Detector-Troubleshooting#no-events-processed"
+
+      # Warning: Detector processing errors
+      - alert: DetectorProcessingErrors
+        expr: rate(detector_processing_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          component: detector
+        annotations:
+          summary: "BGP Detector: Processing errors detected"
+          description: "The detector is experiencing processing errors at {{ $value | humanize }}/sec"
+          runbook_url: "https://github.com/Rezaaze/log_gateway/wiki/Detector-Troubleshooting#processing-errors"
+
+      # Warning: High anomaly detection rate
+      - alert: DetectorHighAnomalyRate
+        expr: rate(detector_anomalies_detected_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: detector
+        annotations:
+          summary: "BGP Detector: High anomaly detection rate"
+          description: "Anomalies detected at {{ $value | humanize }}/sec (threshold: 0.5/sec)"
+          runbook_url: "https://github.com/Rezaaze/log_gateway/wiki/Detector-Troubleshooting#high-anomaly-rate"
+
+      # Warning: Unusually high hijack rate
+      - alert: DetectorHighHijackRate
+        expr: rate(detector_anomalies_detected_total{type="hijack"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: detector
+          anomaly_type: hijack
+        annotations:
+          summary: "BGP Detector: High hijack detection rate"
+          description: "Hijacks detected at {{ $value | humanize }}/sec (threshold: 0.1/sec)"
+          runbook_url: "https://github.com/Rezaaze/log_gateway/wiki/Detector-Troubleshooting#high-hijack-rate"
+
+      # Warning: Error rate exceeds threshold
+      - alert: DetectorHighErrorRate
+        expr: (rate(detector_processing_errors_total[5m]) / (rate(detector_events_processed_total[5m]) + 0.001)) * 100 > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: detector
+        annotations:
+          summary: "BGP Detector: Error rate exceeds 1%"
+          description: "Current error rate: {{ $value | humanize }}%"
+          runbook_url: "https://github.com/Rezaaze/log_gateway/wiki/Detector-Troubleshooting#high-error-rate"
+
+      # Info: Detector low processing rate (informational only)
+      - alert: DetectorLowProcessingRate
+        expr: rate(detector_events_processed_total[5m]) < 100 and rate(detector_events_processed_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: info
+          component: detector
+        annotations:
+          summary: "BGP Detector: Low processing rate"
+          description: "Processing rate is {{ $value | humanize }} events/sec (expected: ~4k-5k/sec)"
+          runbook_url: "https://github.com/Rezaaze/log_gateway/wiki/Detector-Troubleshooting#low-processing-rate"
+
+      # Critical: Detector completely down (combined with gateway health check)
+      - alert: DetectorDown
+        expr: |
+          (
+            rate(detector_events_processed_total[5m]) == 0 and
+            rate(detector_processing_errors_total[5m]) == 0
+          ) or absent(detector_events_processed_total)
+        for: 2m
+        labels:
+          severity: critical
+          component: detector
+        annotations:
+          summary: "BGP Detector: Service appears to be down"
+          description: "Detector is not collecting or exporting metrics. Check NATS connection."
+          runbook_url: "https://github.com/Rezaaze/log_gateway/wiki/Detector-Troubleshooting#detector-down"
+
+# Anomaly-specific recording rules (for faster dashboard queries)
+recording_rules:
+  - name: detector:anomalies:rate5m
+    expr: rate(detector_anomalies_detected_total[5m])
+
+  - name: detector:events:rate5m
+    expr: rate(detector_events_processed_total[5m])
+
+  - name: detector:errors:rate5m
+    expr: rate(detector_processing_errors_total[5m])
+
+  - name: detector:error_ratio:rate5m
+    expr: (rate(detector_processing_errors_total[5m]) / (rate(detector_events_processed_total[5m]) + 0.001))
+
+  - name: detector:hijack:rate1m
+    expr: rate(detector_anomalies_detected_total{type="hijack"}[1m]) * 60
+
+  - name: detector:flapping:rate1m
+    expr: rate(detector_anomalies_detected_total{type="flapping"}[1m]) * 60

@@ -136,6 +136,7 @@ mod tests {
             anomaly_detector: None,
             rpki_tx: None,
             irr_cache: None,
+            detector_runner: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: api_key.map(|k| Arc::new(k.to_string())),

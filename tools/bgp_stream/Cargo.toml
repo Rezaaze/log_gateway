@@ -50,3 +50,6 @@ futures-util = "0.3"
 
 # Fast random number (sampling)
 fastrand = "2"
+
+# NATS Jetstream client
+async-nats = "0.34"

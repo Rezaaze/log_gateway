@@ -1,56 +1,29 @@
 /*!
-BGP Stream (RIPE NCC RIS Live) → Log Gateway
-============================================
+BGP Stream (RIPE NCC RIS Live) → NATS Jetstream
+=================================================
 Rust rewrite of tools/bgp_stream.py v3.
 
 Architecture
 ────────────
-  WebSocket task  ──crossbeam-channel──►  N sender tasks  ──► POST /api/v1/logs/batch
-                                          (batch-100, keep-alive via reqwest pool)
+  WebSocket task  ──async-channel──►  NATS Publisher task  ──► nats://bgp-events
+                                       (batch-1000, NATS publisher)
 
 Env vars (all optional)
 ───────────────────────
-  GATEWAY_URL          default: http://localhost:8090
-  GATEWAY_API_KEY      optional API key
-  GATEWAY_JWT_SECRET   optional JWT secret (HS256, never expires)
-  WORKERS              HTTP sender threads  (default: 8)
-  BATCH_SIZE           entries per POST     (default: 100)
-  BATCH_TIMEOUT_MS     max wait for full batch (default: 20)
-  TENANT_ID            log tenant           (default: bgp)
-  SAMPLE_RATE          0.0-1.0 keep fraction (default: 1.0)
-  CHANNEL_CAP          bounded channel size  (default: 64_000)
+  NATS_URL         default: nats://localhost:4222
+  WORKERS          NATS publisher tasks  (default: 1, single thread OK)
+  BATCH_SIZE       entries per publish   (default: 1000)
+  BATCH_TIMEOUT_MS max wait for full batch (default: 10)
+  TENANT_ID        log tenant           (default: bgp, embedded in metadata)
+  SAMPLE_RATE      0.0-1.0 keep fraction (default: 1.0)
+  CHANNEL_CAP      bounded channel size  (default: 64_000)
+  RUST_LOG         logging level        (default: warn)
 */
 
 use async_channel::{bounded, Receiver, Sender, TrySendError};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
-// ── Local model types (mirrors log-gateway API contract) ──────────────────────
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum LogLevel {
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct LogEntry {
-    #[serde(default = "Uuid::new_v4")]
-    id: Uuid,
-    #[serde(default = "Utc::now")]
-    timestamp: DateTime<Utc>,
-    level: LogLevel,
-    source: String,
-    message: String,
-    metadata: Option<serde_json::Value>,
-}
-use rustls::RootCertStore;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -68,14 +41,37 @@ use tokio_tungstenite::{
     Connector,
 };
 use tracing::{error, info, warn};
+use uuid::Uuid;
+use rustls::RootCertStore;
+
+// ── Local model types (mirrors log-gateway API contract) ──────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
+enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct BgpEvent {
+    #[serde(default = "Uuid::new_v4")]
+    id: Uuid,
+    #[serde(default = "Utc::now")]
+    timestamp: DateTime<Utc>,
+    level: LogLevel,
+    source: String,
+    message: String,
+    metadata: Option<serde_json::Value>,
+}
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 struct Config {
-    gateway_url: String,
-    api_key: String,
-    jwt_secret: String,
+    nats_url: String,
     workers: usize,
     batch_size: usize,
     batch_timeout: Duration,
@@ -84,39 +80,23 @@ struct Config {
     channel_cap: usize,
 }
 
-/// Read a secret: env var first, then /run/secrets/<name> file as fallback.
-fn read_secret(env_name: &str, secret_name: &str) -> String {
-    if let Ok(val) = env::var(env_name) {
-        if !val.is_empty() {
-            return val.trim().to_string();
-        }
-    }
-    let path = format!("/run/secrets/{secret_name}");
-    std::fs::read_to_string(&path)
-        .unwrap_or_default()
-        .trim()
-        .to_string()
-}
-
 impl Config {
     fn from_env() -> Self {
         Self {
-            gateway_url: env::var("GATEWAY_URL").unwrap_or_else(|_| "http://localhost:8090".into()),
-            api_key: read_secret("GATEWAY_API_KEY", "gateway_api_key"),
-            jwt_secret: read_secret("GATEWAY_JWT_SECRET", "gateway_jwt_secret"),
+            nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".into()),
             workers: env::var("WORKERS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(8),
+                .unwrap_or(1),
             batch_size: env::var("BATCH_SIZE")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(100),
+                .unwrap_or(1000),
             batch_timeout: Duration::from_millis(
                 env::var("BATCH_TIMEOUT_MS")
                     .ok()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(20),
+                    .unwrap_or(10),
             ),
             tenant_id: env::var("TENANT_ID").unwrap_or_else(|_| "bgp".into()),
             sample_rate: env::var("SAMPLE_RATE")
@@ -135,38 +115,11 @@ impl Config {
 
 #[derive(Default)]
 struct Stats {
-    sent: AtomicU64,
+    published: AtomicU64,
     errors: AtomicU64,
     dropped: AtomicU64,
     ann: AtomicU64,
     with: AtomicU64,
-}
-
-// ── JWT (HS256, no external crate needed beyond hmac/sha2 — use jsonwebtoken) ─
-
-fn make_jwt(secret: &str, tenant_id: &str) -> String {
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-    use serde::Serialize;
-
-    #[derive(Serialize)]
-    struct Claims {
-        sub: String,
-        tenant_id: String,
-        exp: u64,
-    }
-
-    let claims = Claims {
-        sub: "bgp-stream-rs".into(),
-        tenant_id: tenant_id.to_owned(),
-        exp: 9_999_999_999,
-    };
-
-    encode(
-        &Header::new(Algorithm::HS256),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-    .unwrap_or_default()
 }
 
 // ── Known AS names ─────────────────────────────────────────────────────────────
@@ -219,7 +172,7 @@ struct Announcement {
     prefixes: Option<Vec<String>>,
 }
 
-// ── Message → LogEntry conversion ─────────────────────────────────────────────
+// ── Message → BgpEvent conversion ──────────────────────────────────────────────
 
 fn asn_to_u64(v: &Value) -> u64 {
     match v {
@@ -243,7 +196,7 @@ fn flatten_path(path: &[Value]) -> Vec<u64> {
 fn process_ris_data(
     data: &RisData,
     known: &HashMap<u64, &'static str>,
-    tx: &Sender<LogEntry>,
+    tx: &Sender<BgpEvent>,
     stats: &Arc<Stats>,
     sample_rate: f64,
 ) {
@@ -305,7 +258,7 @@ fn process_ris_data(
                     continue;
                 }
 
-                let entry = LogEntry {
+                let event = BgpEvent {
                     id: Uuid::new_v4(),
                     timestamp: Utc::now(),
                     level: LogLevel::Info,
@@ -322,7 +275,7 @@ fn process_ris_data(
                     })),
                 };
 
-                match tx.try_send(entry) {
+                match tx.try_send(event) {
                     Ok(_) => {
                         stats.ann.fetch_add(1, Ordering::Relaxed);
                     }
@@ -342,7 +295,7 @@ fn process_ris_data(
                 continue;
             }
 
-            let entry = LogEntry {
+            let event = BgpEvent {
                 id: Uuid::new_v4(),
                 timestamp: Utc::now(),
                 level: LogLevel::Warn,
@@ -359,7 +312,7 @@ fn process_ris_data(
                 })),
             };
 
-            match tx.try_send(entry) {
+            match tx.try_send(event) {
                 Ok(_) => {
                     stats.with.fetch_add(1, Ordering::Relaxed);
                 }
@@ -372,22 +325,20 @@ fn process_ris_data(
     }
 }
 
-// ── HTTP sender task ───────────────────────────────────────────────────────────
+// ── NATS Publisher task ────────────────────────────────────────────────────────
 
-async fn sender_task(
+async fn nats_publisher_task(
     id: usize,
-    rx: Receiver<LogEntry>,
-    client: Client,
+    rx: Receiver<BgpEvent>,
+    nats_client: async_nats::Client,
     cfg: Arc<Config>,
     stats: Arc<Stats>,
-    jwt: String,
 ) {
-    let batch_url = format!("{}/api/v1/logs/batch", cfg.gateway_url);
-    let mut batch: Vec<LogEntry> = Vec::with_capacity(cfg.batch_size);
+    let subject = "bgp.events";
+    let mut batch: Vec<BgpEvent> = Vec::with_capacity(cfg.batch_size);
 
     loop {
-        // Collect entries until batch_size reached or batch_timeout expires.
-        // Uses tokio::select! so the Tokio thread is never blocked.
+        // Collect events until batch_size reached or batch_timeout expires.
         let timer = tokio::time::sleep(cfg.batch_timeout);
         tokio::pin!(timer);
 
@@ -396,8 +347,8 @@ async fn sender_task(
                 _ = &mut timer => break,
                 result = rx.recv() => {
                     match result {
-                        Ok(entry) => {
-                            batch.push(entry);
+                        Ok(event) => {
+                            batch.push(event);
                             if batch.len() >= cfg.batch_size {
                                 break;
                             }
@@ -413,47 +364,35 @@ async fn sender_task(
         }
 
         let n = batch.len();
-        let mut req = client
-            .post(&batch_url)
-            .header("Content-Type", "application/json")
-            .header("X-Tenant-ID", &cfg.tenant_id)
-            .header("User-Agent", "bgp-stream-rs/1.0")
-            .json(&batch);
 
-        if !cfg.api_key.is_empty() {
-            req = req.header("X-API-Key", &cfg.api_key);
-        }
-        if !jwt.is_empty() {
-            req = req.header(header::AUTHORIZATION, format!("Bearer {jwt}"));
-        }
+        // Publish each event to NATS
+        for event in batch.drain(..) {
+            let json_bytes = match serde_json::to_vec(&event) {
+                Ok(b) => b,
+                Err(e) => {
+                    error!(worker = id, error = %e, "failed to serialize event");
+                    stats.errors.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+            };
 
-        match req.send().await {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    stats.sent.fetch_add(n as u64, Ordering::Relaxed);
-                } else {
-                    warn!(
-                        worker = id,
-                        status = resp.status().as_u16(),
-                        "batch rejected"
-                    );
-                    stats.errors.fetch_add(n as u64, Ordering::Relaxed);
+            match nats_client.publish(subject, json_bytes.into()).await {
+                Ok(_) => {
+                    stats.published.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    error!(worker = id, subject = subject, error = %e, "NATS publish failed");
+                    stats.errors.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            Err(e) => {
-                error!(worker = id, error = %e, "send failed");
-                stats.errors.fetch_add(n as u64, Ordering::Relaxed);
-            }
         }
-
-        batch.clear();
     }
 }
 
 // ── WebSocket stream task ──────────────────────────────────────────────────────
 
 async fn bgp_stream_task(
-    tx: Sender<LogEntry>,
+    tx: Sender<BgpEvent>,
     cfg: Arc<Config>,
     stats: Arc<Stats>,
     known: Arc<HashMap<u64, &'static str>>,
@@ -466,8 +405,6 @@ async fn bgp_stream_task(
     .unwrap();
 
     // Build a rustls ClientConfig with WebPKI roots and no ALPN.
-    // Not setting ALPN is critical: if rustls sends "h2" and the server
-    // accepts it, the WebSocket HTTP/1.1 upgrade will fail.
     let mut root_store = RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let tls_config = rustls::ClientConfig::builder()
@@ -553,22 +490,22 @@ async fn bgp_stream_task(
 // ── Stats printer ─────────────────────────────────────────────────────────────
 
 async fn stats_task(stats: Arc<Stats>, cfg: Arc<Config>, start: Instant, chan_cap: usize) {
-    let mut prev_sent: u64 = 0;
+    let mut prev_published: u64 = 0;
     loop {
         sleep(Duration::from_secs(10)).await;
         let elapsed = start.elapsed().as_secs_f64();
-        let sent = stats.sent.load(Ordering::Relaxed);
+        let published = stats.published.load(Ordering::Relaxed);
         let errors = stats.errors.load(Ordering::Relaxed);
         let dropped = stats.dropped.load(Ordering::Relaxed);
         let ann = stats.ann.load(Ordering::Relaxed);
         let with = stats.with.load(Ordering::Relaxed);
 
-        let delta = sent.saturating_sub(prev_sent);
-        prev_sent = sent;
+        let delta = published.saturating_sub(prev_published);
+        prev_published = published;
 
-        let rps_window = delta as f64 / 10.0;
-        let rps_avg = if elapsed > 0.0 {
-            sent as f64 / elapsed
+        let pps_window = delta as f64 / 10.0;
+        let pps_avg = if elapsed > 0.0 {
+            published as f64 / elapsed
         } else {
             0.0
         };
@@ -579,8 +516,8 @@ async fn stats_task(stats: Arc<Stats>, cfg: Arc<Config>, start: Instant, chan_ca
         };
 
         println!(
-            "[stats] sent={sent} | errors={errors} | dropped={dropped} | \
-             rps_10s={rps_window:.0}/s | rps_avg={rps_avg:.0}/s | \
+            "[stats] published={published} | errors={errors} | dropped={dropped} | \
+             pps_10s={pps_window:.0}/s | pps_avg={pps_avg:.0}/s | \
              ingress={ingress:.0}/s | workers={} | batch={} | \
              ann={ann} | with={with} | elapsed={elapsed:.0}s",
             cfg.workers, cfg.batch_size,
@@ -594,7 +531,6 @@ async fn stats_task(stats: Arc<Stats>, cfg: Arc<Config>, start: Instant, chan_ca
 #[tokio::main]
 async fn main() {
     // Install aws-lc-rs as the process-level rustls CryptoProvider.
-    // Must happen before any TLS connection is attempted.
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("Failed to install rustls CryptoProvider");
@@ -610,54 +546,42 @@ async fn main() {
     let stats = Arc::new(Stats::default());
     let known = Arc::new(known_as_map());
 
-    let jwt = if cfg.jwt_secret.is_empty() {
-        String::new()
-    } else {
-        make_jwt(&cfg.jwt_secret, &cfg.tenant_id)
-    };
-
     println!("{}", "=".repeat(65));
-    println!("BGP Stream (RIPE NCC RIS Live) → Log Gateway  (Rust v1)");
+    println!("BGP Stream (RIPE NCC RIS Live) → NATS Jetstream  (Rust v2)");
     println!("{}", "=".repeat(65));
-    println!("  Gateway:     {}/api/v1/logs/batch", cfg.gateway_url);
+    println!("  NATS URL:    {}", cfg.nats_url);
     println!("  Workers:     {}", cfg.workers);
     println!("  Batch size:  {}", cfg.batch_size);
     println!("  Batch tmo:   {}ms", cfg.batch_timeout.as_millis());
     println!("  Sample rate: {:.0}%", cfg.sample_rate * 100.0);
     println!("  Channel cap: {}", cfg.channel_cap);
-    println!(
-        "  API-Key:     {}",
-        if cfg.api_key.is_empty() { "no" } else { "yes" }
-    );
-    println!(
-        "  JWT:         {}",
-        if jwt.is_empty() { "no" } else { "yes" }
-    );
     println!("{}", "=".repeat(65));
 
-    // Build shared reqwest client (connection pool = keep-alive per host)
-    let client = Client::builder()
-        .pool_max_idle_per_host(cfg.workers + 2)
-        .timeout(Duration::from_secs(10))
-        .tcp_keepalive(Duration::from_secs(30))
-        .use_rustls_tls()
-        .build()
-        .expect("failed to build HTTP client");
+    // Connect to NATS
+    let nats_client = match async_nats::connect(&cfg.nats_url).await {
+        Ok(client) => {
+            info!("Connected to NATS at {}", cfg.nats_url);
+            client
+        }
+        Err(e) => {
+            error!("Failed to connect to NATS: {e}");
+            std::process::exit(1);
+        }
+    };
 
-    // Bounded channel: WebSocket producer → sender consumers
-    let (tx, rx) = bounded::<LogEntry>(cfg.channel_cap);
+    // Bounded channel: WebSocket producer → NATS publishers
+    let (tx, rx) = bounded::<BgpEvent>(cfg.channel_cap);
 
     let start = Instant::now();
 
-    // Spawn sender workers
+    // Spawn NATS publisher workers
     for i in 0..cfg.workers {
         let rx_i = rx.clone();
-        let client_i = client.clone();
+        let client_i = nats_client.clone();
         let cfg_i = cfg.clone();
         let stats_i = stats.clone();
-        let jwt_i = jwt.clone();
         tokio::spawn(async move {
-            sender_task(i, rx_i, client_i, cfg_i, stats_i, jwt_i).await;
+            nats_publisher_task(i, rx_i, client_i, cfg_i, stats_i).await;
         });
     }
 

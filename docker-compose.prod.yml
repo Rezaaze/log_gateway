@@ -227,9 +227,31 @@ services:
       - prometheus
     restart: unless-stopped
 
-  # ── BGP Stream (Rust) — RIPE NCC RIS Live → Gateway ────────────────────────
+  # ── NATS Jetstream ──────────────────────────────────────────────────────────────
+  # Message Streaming für BGP-Events
+  # Web UI: http://localhost:8222
+  nats:
+    image: nats:latest
+    container_name: nats
+    ports:
+      - "4222:4222"     # NATS Protocol
+      - "8222:8222"     # HTTP Management
+    volumes:
+      - ./deploy/nats/nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/data/jetstream
+    command: -c /etc/nats/nats.conf
+    networks:
+      - gateway-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # ── BGP Stream (Rust) — RIPE NCC RIS Live → NATS ──────────────────────────────
   # Verbindet sich mit wss://ris-live.ripe.net/v1/ws/, empfängt alle BGP
-  # UPDATE-Events (ANNOUNCE + WITHDRAW) und sendet sie gebündelt ans Gateway.
+  # UPDATE-Events (ANNOUNCE + WITHDRAW) und publiziert sie zu NATS.
   # WICHTIG: /etc/hosts auf dem Host muss enthalten: 193.0.11.16 ris-live.ripe.net
   #          (extra_hosts funktioniert NICHT mit network_mode: host)
   #
@@ -240,10 +262,10 @@ services:
     image: ghcr.io/rezaaze/log_gateway/bgp-stream:latest
     container_name: bgp-stream
     environment:
-      GATEWAY_URL:       "http://127.0.0.1:8090"      # host-network: HAProxy direkt
+      NATS_URL:          "nats://nats:4222"           # NATS Jetstream
       WORKERS:           "8"
-      BATCH_SIZE:        "100"
-      BATCH_TIMEOUT_MS:  "20"
+      BATCH_SIZE:        "1000"                       # Größer möglich mit NATS (kein HTTP-Overhead)
+      BATCH_TIMEOUT_MS:  "10"                         # Schneller möglich mit NATS
       TENANT_ID:         "bgp"
       SAMPLE_RATE:       "1.0"
       CHANNEL_CAP:       "64000"
@@ -253,7 +275,7 @@ services:
       - gateway_jwt_secret
     network_mode: host                                 # Outbound HTTPS via Host-Stack
     depends_on:
-      haproxy:
+      nats:
         condition: service_healthy
     restart: unless-stopped
 
@@ -330,6 +352,7 @@ volumes:
   prometheus-data:
   grafana-data:
   minio-data:
+  nats-data:
   clickhouse-data:
   clickhouse-logs:
   routinator-data:

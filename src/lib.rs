@@ -24,6 +24,7 @@ pub mod clickhouse_exporter;
 pub mod config;
 pub mod cost_reporter;
 pub mod cost_tracker;
+pub mod detector_runner;
 pub mod escalation;
 pub mod handlers;
 pub mod hot_reload;
@@ -31,9 +32,11 @@ pub mod irr_cache;
 pub mod logging;
 pub mod loki_logger;
 pub mod metrics;
+pub mod metrics_exporter;
 pub mod middleware;
 pub mod model_trainer;
 pub mod models;
+pub mod nats_subscriber;
 pub mod quota_manager;
 pub mod rate_limiter;
 pub mod redactor;
@@ -364,6 +367,53 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
     // Create quota manager
     let quota_manager = Arc::new(QuotaManager::new());
 
+    // Create detector runner if NATS is enabled in config
+    let detector_runner = if config.nats.enabled {
+        // Create detector channel
+        let (detector_tx, detector_rx) =
+            tokio::sync::mpsc::channel::<crate::nats_subscriber::BgpRecord>(64000);
+
+        // Create detector runner with metrics
+        let detector_runner = Arc::new(detector_runner::DetectorRunner::new());
+
+        // Clone for task
+        let detector_runner_clone = Arc::clone(&detector_runner);
+
+        // Spawn detector task
+        tokio::spawn(async move {
+            detector_runner_clone.run(detector_rx).await;
+        });
+
+        // Start NATS subscriber if URL is configured
+        if !config.nats.url.is_empty() {
+            let nats_config = nats_subscriber::SubscriberConfig {
+                nats_url: config.nats.url.clone(),
+                subject: config.nats.subject.clone(),
+            };
+
+            tokio::spawn(async move {
+                if let Err(e) =
+                    nats_subscriber::subscribe_bgp_events(nats_config, detector_tx).await
+                {
+                    tracing::error!("NATS subscriber failed: {}", e);
+                }
+            });
+
+            tracing::info!(
+                "Detector runner started with NATS subscription to {}",
+                config.nats.url
+            );
+        } else {
+            tracing::warn!(
+                "NATS enabled but no URL configured, detector runner started without NATS"
+            );
+        }
+
+        Some(detector_runner)
+    } else {
+        None
+    };
+
     // Create app state
     let app_state = AppState {
         redactor,
@@ -377,6 +427,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         anomaly_detector,
         rpki_tx,
         irr_cache,
+        detector_runner,
         sink_output_dir: PathBuf::from(&config.sink.output_dir),
         started_at: std::time::Instant::now(),
         api_key,
@@ -546,6 +597,7 @@ pub fn create_test_app(config: GatewayConfig) -> Result<Router> {
         anomaly_detector: None,
         rpki_tx: None,
         irr_cache: None,
+        detector_runner: None,
         sink_output_dir: PathBuf::from(&config.sink.output_dir),
         started_at: std::time::Instant::now(),
         api_key: None,

@@ -16,6 +16,7 @@ use crate::bgp_query::ClickHouseQueryClient;
 use crate::cache::{CacheEntry, CacheStats, SemanticCache};
 use crate::clickhouse_exporter::{self, ClickHouseExporter};
 use crate::cost_tracker::{CostTracker, GatewayCostSummary};
+use crate::detector_runner::DetectorRunner;
 use crate::metrics::GatewayMetrics;
 use crate::models::{BatchEntryResult, BatchIngestResponse, IngestResponse, LogEntry, LogLevel};
 use crate::quota_manager::QuotaManager;
@@ -54,6 +55,8 @@ pub struct AppState {
     pub rpki_tx: Option<tokio::sync::mpsc::Sender<crate::clickhouse_exporter::BgpClickHouseRecord>>,
     /// IRR cache for checking prefix origin consistency with IRR databases
     pub irr_cache: Option<Arc<crate::irr_cache::IrrCache>>,
+    /// Detector runner for processing BGP events from NATS
+    pub detector_runner: Option<Arc<DetectorRunner>>,
     pub sink_output_dir: PathBuf,
     pub started_at: std::time::Instant,
     /// API key cached at startup — avoids per-request disk reads of /run/secrets/
@@ -809,12 +812,26 @@ pub async fn tenant_cost(
 }
 
 pub async fn metrics(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    // Start with gateway metrics
+    let mut all_metrics = state.metrics.render();
+
+    // Add detector metrics if detector runner is available
+    if let Some(detector_runner) = &state.detector_runner {
+        let detector_metrics = detector_runner.gather_metrics();
+        if !detector_metrics.is_empty() {
+            if !all_metrics.is_empty() && !all_metrics.ends_with('\n') {
+                all_metrics.push('\n');
+            }
+            all_metrics.push_str(&detector_metrics);
+        }
+    }
+
     (
         [(
             axum::http::header::CONTENT_TYPE,
             "text/plain; version=0.0.4",
         )],
-        state.metrics.render(),
+        all_metrics,
     )
 }
 
@@ -961,6 +978,7 @@ mod tests {
             anomaly_detector: None,
             rpki_tx: None,
             irr_cache: None,
+            detector_runner: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -1007,6 +1025,7 @@ mod tests {
             anomaly_detector: None,
             rpki_tx: None,
             irr_cache: None,
+            detector_runner: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -1062,6 +1081,7 @@ mod tests {
             anomaly_detector: None,
             rpki_tx: None,
             irr_cache: None,
+            detector_runner: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -1105,6 +1125,7 @@ mod tests {
             anomaly_detector: None,
             rpki_tx: None,
             irr_cache: None,
+            detector_runner: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -1159,6 +1180,7 @@ mod tests {
             anomaly_detector: None,
             rpki_tx: None,
             irr_cache: None,
+            detector_runner: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,
@@ -1208,6 +1230,7 @@ mod tests {
             anomaly_detector: None,
             rpki_tx: None,
             irr_cache: None,
+            detector_runner: None,
             sink_output_dir: PathBuf::from("data/logs"),
             started_at: std::time::Instant::now(),
             api_key: None,

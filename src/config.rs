@@ -293,6 +293,35 @@ impl Default for SmtpConfig {
     }
 }
 
+/// Configuration for NATS subscription
+#[derive(Debug, Deserialize, Clone)]
+pub struct NatsConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_nats_url")]
+    pub url: String,
+    #[serde(default = "default_nats_subject")]
+    pub subject: String,
+}
+
+fn default_nats_url() -> String {
+    "nats://localhost:4222".to_string()
+}
+
+fn default_nats_subject() -> String {
+    "bgp.events".to_string()
+}
+
+impl Default for NatsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_false(),
+            url: default_nats_url(),
+            subject: default_nats_subject(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct GatewayConfig {
     pub server: ServerConfig,
@@ -320,6 +349,9 @@ pub struct GatewayConfig {
     /// SMTP email reporting configuration
     #[serde(default)]
     pub smtp: SmtpConfig,
+    /// NATS subscription configuration for BGP events
+    #[serde(default)]
+    pub nats: NatsConfig,
 }
 
 impl GatewayConfig {

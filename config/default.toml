@@ -87,3 +87,8 @@ host = "localhost"
 port = 587
 from = "gateway@localhost"
 # to = ["admin@example.com"]
+
+[nats]
+enabled = false
+url = "nats://localhost:4222"
+subject = "bgp.events"
