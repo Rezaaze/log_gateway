@@ -59,6 +59,7 @@ opentelemetry-semantic-conventions = "0.27"
 async-nats = "0.34"
 prometheus = "0.13"
 tokio-stream = { version = "0.1", features = ["sync"] }
+glob = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

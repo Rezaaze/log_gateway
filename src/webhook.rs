@@ -42,6 +42,7 @@ pub struct WebhookPayload {
 }
 
 /// Sender for webhook notifications.
+#[derive(Clone)]
 pub struct WebhookSender {
     /// HTTP client with timeout configuration.
     http: Client,

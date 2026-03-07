@@ -94,3 +94,9 @@ from = "gateway@localhost"
 enabled = false
 url = "nats://bgp-stream:bgp-stream@nats:4222"
 subject = "bgp.events"
+
+[snapshot]
+# Directory where baseline model snapshots are stored
+dir = "/data/snapshots"
+# Number of days to keep snapshots (older files are deleted)
+retention_days = 7

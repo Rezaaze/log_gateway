@@ -639,6 +639,22 @@ mod tests {
         }
     }
 
+    // Helper function specifically for flapping tests
+    fn make_flap_event(prefix: &str, event_type: &str) -> BgpClickHouseRecord {
+        BgpClickHouseRecord {
+            prefix: prefix.to_string(),
+            origin_as: 64512,
+            event_type: event_type.to_string(),
+            timestamp: Utc::now(),
+            tenant_id: "test".to_string(),
+            peer_ip: "1.2.3.4".to_string(),
+            peer_asn: 64512,
+            as_path: vec![64512],
+            community: vec![],
+            source: "test".to_string(),
+        }
+    }
+
     // Test 1: Bekanntes AS + RPKI invalid + IRR inconsistent → confidence 0.75
     #[test]
     fn test_check_rpki_invalid_irr_inconsistent_known_as() {
@@ -1113,5 +1129,177 @@ mod tests {
         let rendered = metrics.render();
         assert!(rendered.contains("gateway_anomalies_total"));
         assert!(rendered.contains("anomaly_type=\"PossibleHijack\""));
+    }
+
+    // ── FlappingDetector tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_flapping_below_threshold_no_alert() {
+        let detector = FlappingDetector::new();
+        let prefix = "10.0.0.0/24";
+
+        // Sende 49 abwechselnde announce/withdraw Events
+        for i in 0..49 {
+            let event_type = if i % 2 == 0 { "announce" } else { "withdraw" };
+            let event = make_flap_event(prefix, event_type);
+            let result = detector.check(&event);
+            // Nach 49 Events sollte noch kein Alert kommen (Threshold 50)
+            assert!(result.is_none());
+        }
+    }
+
+    #[test]
+    fn test_flapping_threshold_met_but_no_oscillation() {
+        let detector = FlappingDetector::new();
+        let prefix = "10.0.0.0/24";
+
+        // Sende 50 Events, alle "announce" (kein Richtungswechsel)
+        for _ in 0..50 {
+            let event = make_flap_event(prefix, "announce");
+            let result = detector.check(&event);
+            // direction_changes = 0 < MIN_DIRECTION_CHANGES=6 → None
+            assert!(result.is_none());
+        }
+    }
+
+    #[test]
+    fn test_flapping_threshold_met_few_direction_changes() {
+        let detector = FlappingDetector::new();
+        let prefix = "10.0.0.0/24";
+
+        // Sende 50 Events: 25× announce, dann 25× withdraw (nur 1 Richtungswechsel)
+        for i in 0..50 {
+            let event_type = if i < 25 { "announce" } else { "withdraw" };
+            let event = make_flap_event(prefix, event_type);
+            let result = detector.check(&event);
+            // direction_changes = 1 < 6 → None
+            assert!(result.is_none());
+        }
+    }
+
+    #[test]
+    fn test_flapping_both_conditions_met() {
+        let detector = FlappingDetector::new();
+        let prefix = "10.0.0.0/24";
+
+        // Sende 50 abwechselnde announce/withdraw Events
+        for i in 0..50 {
+            let event_type = if i % 2 == 0 { "announce" } else { "withdraw" };
+            let event = make_flap_event(prefix, event_type);
+            let result = detector.check(&event);
+            // Erst nach dem 50. Event sollte Alert kommen
+            if i == 49 {
+                assert!(result.is_some());
+                let anomaly = result.unwrap();
+                assert_eq!(anomaly.anomaly_type, AnomalyType::PrefixFlapping);
+                assert_eq!(anomaly.prefix, prefix);
+                assert_eq!(anomaly.confidence, 0.75);
+            } else {
+                assert!(result.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn test_flapping_exactly_6_direction_changes() {
+        let detector = FlappingDetector::new();
+        let prefix = "10.0.0.0/24";
+
+        // Sequenz mit 7 Events, 6 Richtungswechsel:
+        // announce, withdraw, announce, withdraw, announce, withdraw, announce
+        let sequence = [
+            "announce", "withdraw", "announce", "withdraw", "announce", "withdraw", "announce",
+        ];
+        for &event_type in &sequence {
+            let event = make_flap_event(prefix, event_type);
+            let result = detector.check(&event);
+            // Nur 7 Events → len < 50 → None
+            assert!(result.is_none());
+        }
+
+        // Füge 43 weitere announce Events hinzu → len=50, direction_changes=6
+        for _ in 0..43 {
+            let event = make_flap_event(prefix, "announce");
+            let _result = detector.check(&event);
+            // Nach dem 50. Event sollte Alert kommen
+        }
+
+        // Letztes Event sollte Alert auslösen
+        let event = make_flap_event(prefix, "announce");
+        let result = detector.check(&event);
+        assert!(result.is_some());
+        let anomaly = result.unwrap();
+        assert_eq!(anomaly.anomaly_type, AnomalyType::PrefixFlapping);
+    }
+
+    #[test]
+    fn test_flapping_independent_prefixes() {
+        let detector = FlappingDetector::new();
+        let prefix1 = "10.0.0.0/24";
+        let prefix2 = "192.168.0.0/16";
+
+        // Sende 50 abwechselnde Events für beide Prefixe
+        for i in 0..50 {
+            let event_type = if i % 2 == 0 { "announce" } else { "withdraw" };
+            let event1 = make_flap_event(prefix1, event_type);
+            let event2 = make_flap_event(prefix2, event_type);
+
+            let result1 = detector.check(&event1);
+            let result2 = detector.check(&event2);
+
+            // Erst nach dem 50. Event sollten Alarme kommen
+            if i == 49 {
+                assert!(result1.is_some());
+                assert!(result2.is_some());
+                let anomaly1 = result1.unwrap();
+                let anomaly2 = result2.unwrap();
+                assert_eq!(anomaly1.prefix, prefix1);
+                assert_eq!(anomaly2.prefix, prefix2);
+                // Kein Cross-Prefix-Bleeding
+                assert_ne!(anomaly1.prefix, anomaly2.prefix);
+            } else {
+                assert!(result1.is_none());
+                assert!(result2.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn test_flapping_direction_changes_5_no_alert() {
+        let detector = FlappingDetector::new();
+        let prefix = "10.0.0.0/24";
+
+        // Erzeuge Sequenz mit genau 5 Richtungswechseln über 50 Events
+        // Pattern: 10× announce, 10× withdraw, 10× announce, 10× withdraw, 10× announce
+        // Das sind 5 Blöcke mit 4 Richtungswechseln (announce→withdraw, withdraw→announce, announce→withdraw, withdraw→announce)
+        // Das sind 4 Richtungswechsel, nicht 5. Also ändern wir zu:
+        // Pattern: 8× announce, 8× withdraw, 8× announce, 8× withdraw, 9× announce, 9× withdraw
+        // Das sind 50 Events (8+8+8+8+9+9 = 50) mit 5 Richtungswechseln
+        let blocks = [
+            ("announce", 8),
+            ("withdraw", 8),
+            ("announce", 8),
+            ("withdraw", 8),
+            ("announce", 9),
+            ("withdraw", 9),
+        ];
+
+        let mut events_sent = 0;
+        for (event_type, count) in blocks.iter() {
+            for _ in 0..*count {
+                let event = make_flap_event(prefix, event_type);
+                let result = detector.check(&event);
+                events_sent += 1;
+
+                // Nach 50 Events sollte immer noch kein Alert kommen (5 < 6)
+                if events_sent == 50 {
+                    assert!(
+                        result.is_none(),
+                        "Should not alert with 5 direction changes"
+                    );
+                }
+            }
+        }
+        assert_eq!(events_sent, 50);
     }
 }

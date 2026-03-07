@@ -24,6 +24,7 @@ pub mod clickhouse_exporter;
 pub mod config;
 pub mod cost_reporter;
 pub mod cost_tracker;
+pub mod detector_loop;
 pub mod detector_runner;
 pub mod escalation;
 pub mod handlers;
@@ -308,26 +309,28 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         tracing::info!("RoaPoller started — polling every 5 minutes");
     }
 
-    // Spawn daily model retraining task if ClickHouse is enabled and anomaly detection is active
-    if config.clickhouse.enabled {
-        if let Some(ref detector_arc) = anomaly_detector {
-            let baseline_arc = detector_arc.baseline_arc();
-            let trainer = Arc::new(model_trainer::ModelTrainer::new(
-                baseline_arc,
-                config.clickhouse.url.clone(),
-                config.clickhouse.database.clone(),
-                config.clickhouse.table.clone(),
-            ));
+    // Spawn daily model snapshot task (replaces ClickHouse-based training)
+    // The model now learns incrementally from NATS stream, trainer only handles persistence
+    if let Some(ref detector_arc) = anomaly_detector {
+        let baseline_arc = detector_arc.baseline_arc();
+        let trainer = Arc::new(model_trainer::ModelTrainer::new(
+            baseline_arc,
+            std::path::PathBuf::from(&config.snapshot.dir),
+            config.snapshot.retention_days,
+        ));
 
-            // Load snapshot immediately on startup (before first training cycle)
-            let trainer_for_startup = Arc::clone(&trainer);
-            tokio::spawn(async move {
-                model_trainer::ModelTrainer::load_snapshot_on_startup(trainer_for_startup).await;
-            });
+        // Load snapshot immediately on startup (cold start if no snapshot exists)
+        let trainer_for_startup = Arc::clone(&trainer);
+        tokio::spawn(async move {
+            model_trainer::ModelTrainer::load_snapshot_on_startup(trainer_for_startup).await;
+        });
 
-            tokio::spawn(model_trainer::ModelTrainer::run_daily(trainer));
-            tracing::info!("ModelTrainer daily retraining task spawned");
-        }
+        tokio::spawn(model_trainer::ModelTrainer::run_daily(trainer));
+        tracing::info!(
+            "ModelTrainer daily snapshot task spawned (snapshot dir: {}, retention: {} days)",
+            config.snapshot.dir,
+            config.snapshot.retention_days
+        );
     }
 
     // Spawn RPKI enrichment task if both RPKI and anomaly detection are enabled

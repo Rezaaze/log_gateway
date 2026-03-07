@@ -322,6 +322,32 @@ impl Default for NatsConfig {
     }
 }
 
+/// Configuration for baseline model snapshot persistence
+#[derive(Debug, Deserialize, Clone)]
+pub struct SnapshotConfig {
+    #[serde(default = "default_snapshot_dir")]
+    pub dir: String,
+    #[serde(default = "default_snapshot_retention")]
+    pub retention_days: u32,
+}
+
+fn default_snapshot_dir() -> String {
+    "/data/snapshots".to_string()
+}
+
+fn default_snapshot_retention() -> u32 {
+    7
+}
+
+impl Default for SnapshotConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_snapshot_dir(),
+            retention_days: default_snapshot_retention(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct GatewayConfig {
     pub server: ServerConfig,
@@ -352,6 +378,9 @@ pub struct GatewayConfig {
     /// NATS subscription configuration for BGP events
     #[serde(default)]
     pub nats: NatsConfig,
+    /// Baseline model snapshot configuration
+    #[serde(default)]
+    pub snapshot: SnapshotConfig,
 }
 
 impl GatewayConfig {
