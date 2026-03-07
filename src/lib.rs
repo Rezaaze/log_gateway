@@ -269,11 +269,13 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         None, // tenant_id from context/header (None at startup)
     ));
 
-    // Create RPKI cache if enabled
+    // Create RPKI cache if enabled and start background VRP-dump refresh loop
     let rpki_cache = if config.rpki.enabled {
-        Some(Arc::new(rpki_cache::RpkiCache::new(
+        let cache = Arc::new(rpki_cache::RpkiCache::new(
             config.rpki.routinator_url.clone(),
-        )))
+        ));
+        cache.start_refresh_loop().await;
+        Some(cache)
     } else {
         None
     };

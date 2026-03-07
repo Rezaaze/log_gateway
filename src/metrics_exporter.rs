@@ -37,19 +37,19 @@ impl DetectorMetrics {
 
         // Register metrics
         registry.register(
-            "detector_events_processed_total",
+            "detector_events_processed",
             "Total number of BGP events processed",
             events_processed_total.clone(),
         );
 
         registry.register(
-            "detector_anomalies_detected_total",
+            "detector_anomalies_detected",
             "Total number of anomalies detected",
             anomalies_detected_total.clone(),
         );
 
         registry.register(
-            "detector_processing_errors_total",
+            "detector_processing_errors",
             "Total number of processing errors",
             detection_errors_total.clone(),
         );
@@ -175,12 +175,14 @@ mod tests {
         );
 
         // Verify metric types are declared
+        // Note: prometheus-client 0.22 OpenMetrics format writes the base name in the TYPE line,
+        // the _total suffix only appears on the actual data line.
         assert!(
-            output.contains("# TYPE detector_events_processed_total counter"),
+            output.contains("# TYPE detector_events_processed counter"),
             "Should declare counter type"
         );
         assert!(
-            output.contains("# TYPE detector_anomalies_detected_total counter"),
+            output.contains("# TYPE detector_anomalies_detected counter"),
             "Should declare anomalies type"
         );
 

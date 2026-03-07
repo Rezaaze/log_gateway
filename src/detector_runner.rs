@@ -293,34 +293,47 @@ impl DetectorRunner {
             // Only check ANNOUNCE events for RPKI validation
             if record.event_type == "announce" {
                 // a) Get RPKI status
-                let rpki_status: RpkiStatus = rpki_cache
-                    .validate(&bgp_record.prefix, bgp_record.origin_as)
-                    .await;
+                let rpki_status: RpkiStatus =
+                    rpki_cache.validate(&bgp_record.prefix, bgp_record.origin_as);
 
-                // b) Get IRR status if cache available
-                let irr_status = if let Some(irr_cache) = &self.irr_cache {
-                    irr_cache
-                        .check(&bgp_record.prefix, bgp_record.origin_as)
-                        .await
-                } else {
-                    IrrStatus::Unavailable
-                };
+                match rpki_status {
+                    RpkiStatus::Valid => {
+                        // Kein Hijack möglich wenn RPKI valid
+                        return Ok(());
+                    }
+                    RpkiStatus::InvalidAsn | RpkiStatus::InvalidLength => {
+                        // Echter Hijack — kryptografisch bewiesen
+                        // b) Get IRR status if cache available
+                        let irr_status = if let Some(irr_cache) = &self.irr_cache {
+                            irr_cache
+                                .check(&bgp_record.prefix, bgp_record.origin_as)
+                                .await
+                        } else {
+                            IrrStatus::Unavailable
+                        };
 
-                // c) Check for anomaly with RPKI and IRR status
-                if let Some(anomaly) = self.hijack_detector.check_with_rpki_status(
-                    &bgp_record,
-                    rpki_status,
-                    &irr_status,
-                ) {
-                    self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
-                    self.metrics.record_anomaly("hijack");
-                    tracing::warn!(
-                        "Hijack detected with RPKI/IRR: prefix={}, origin_as={}, confidence={:.2}, details={}",
-                        anomaly.prefix,
-                        anomaly.origin_as,
-                        anomaly.confidence,
-                        anomaly.details
-                    );
+                        // c) Check for anomaly with RPKI and IRR status
+                        if let Some(anomaly) = self.hijack_detector.check_with_rpki_status(
+                            &bgp_record,
+                            rpki_status,
+                            &irr_status,
+                        ) {
+                            self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
+                            self.metrics.record_anomaly("hijack");
+                            tracing::warn!(
+                                "Hijack detected with RPKI/IRR: prefix={}, origin_as={}, confidence={:.2}, details={}",
+                                anomaly.prefix,
+                                anomaly.origin_as,
+                                anomaly.confidence,
+                                anomaly.details
+                            );
+                        }
+                    }
+                    RpkiStatus::NotFound | RpkiStatus::Unavailable => {
+                        // Kein Beweis → kein Alert
+                        // Trotzdem: IRR check überspringen
+                        // Keine weitere Verarbeitung für diesen Record
+                    }
                 }
             } else {
                 // For WITHDRAW events, use basic hijack detection without RPKI

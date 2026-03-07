@@ -210,7 +210,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(detector_events_processed_total_total[1m]))",
+          "expr": "sum(rate(detector_events_processed_total[1m]))",
           "legendFormat": "events/s"
         }
       ],
@@ -234,7 +234,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(detector_anomalies_detected_total_total{type=\"hijack\"})",
+          "expr": "sum(detector_anomalies_detected_total{type=\"hijack\"})",
           "legendFormat": "Hijacks"
         }
       ],
@@ -258,7 +258,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(detector_anomalies_detected_total_total{type=\"flapping\"})",
+          "expr": "sum(detector_anomalies_detected_total{type=\"flapping\"})",
           "legendFormat": "Flapping"
         }
       ],
@@ -282,7 +282,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(detector_processing_errors_total_total)",
+          "expr": "sum(detector_processing_errors_total)",
           "legendFormat": "Errors"
         }
       ],
@@ -313,17 +313,17 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(detector_events_processed_total_total[1m]))",
+          "expr": "sum(rate(detector_events_processed_total[1m]))",
           "legendFormat": "Total events/s"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(detector_anomalies_detected_total_total{type=\"hijack\"}[1m]))",
+          "expr": "sum(rate(detector_anomalies_detected_total{type=\"hijack\"}[1m]))",
           "legendFormat": "Hijacks/s"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(detector_anomalies_detected_total_total{type=\"flapping\"}[1m]))",
+          "expr": "sum(rate(detector_anomalies_detected_total{type=\"flapping\"}[1m]))",
           "legendFormat": "Flapping/s"
         }
       ],
@@ -382,7 +382,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(increase(detector_anomalies_detected_total_total{type=\"hijack\"}[5m]))",
+          "expr": "sum(increase(detector_anomalies_detected_total{type=\"hijack\"}[5m]))",
           "legendFormat": "Hijacks"
         }
       ],
@@ -410,7 +410,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(increase(detector_anomalies_detected_total_total{type=\"flapping\"}[5m]))",
+          "expr": "sum(increase(detector_anomalies_detected_total{type=\"flapping\"}[5m]))",
           "legendFormat": "Flapping"
         }
       ],
@@ -430,7 +430,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(detector_events_processed_total_total[1m])",
+          "expr": "rate(detector_events_processed_total[1m])",
           "legendFormat": "{{instance}}"
         }
       ],
@@ -450,7 +450,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(detector_anomalies_detected_total_total)",
+          "expr": "sum(detector_anomalies_detected_total)",
           "legendFormat": "Total Anomalies"
         }
       ],
