@@ -739,12 +739,18 @@ mod tests {
             assert!(result.is_ok(), "process_record should succeed");
         }
 
-        // No hijack anomalies should be detected (only flapping detector may trigger).
-        // We only verify that processing all 20 events completed without panic or error.
+        // events_processed is only incremented by the run() loop, not by process_record().
+        // Verify that:
+        //   1. No errors occurred during processing
+        //   2. No anomalies were detected (20 events < flapping threshold=50, no hijack on WITHDRAW)
         let stats = runner.stats();
         assert_eq!(
-            stats.events_processed, 20,
-            "all 20 WITHDRAW events must be processed"
+            stats.errors, 0,
+            "no errors expected for valid WITHDRAW events"
+        );
+        assert_eq!(
+            stats.anomalies_detected, 0,
+            "WITHDRAW events must not trigger hijack or flapping (20 < threshold 50)"
         );
     }
 }
