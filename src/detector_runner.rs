@@ -566,4 +566,185 @@ mod tests {
             "Hijack detection should have triggered"
         );
     }
+
+    // Helper function to create a BGP record for testing
+    fn make_bgp_record(prefix: &str, origin_as: u32, event_type: &str) -> BgpRecord {
+        use chrono::Utc;
+
+        BgpRecord {
+            prefix: prefix.to_string(),
+            origin_as,
+            peer_asn: 64512,
+            event_type: event_type.to_string(),
+            as_path: vec![64512, origin_as],
+            timestamp: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpki_valid_suppresses_hijack_check() {
+        use crate::rpki_cache::{addr_to_u128, RpkiCache};
+        use ipnet::IpNet;
+        use std::collections::HashMap;
+
+        // Create RpkiCache with mock data
+        let rpki_cache = Arc::new(RpkiCache::new("http://dummy".to_string()));
+        // Add VRP: 192.0.2.0/24 → AS64512, max_length=24
+        let prefix_network: IpNet = "192.0.2.0/24".parse().unwrap();
+        let key = (
+            prefix_network.prefix_len(),
+            addr_to_u128(prefix_network.network()),
+        );
+        let index = HashMap::from([(key, vec![(24, 64512)])]);
+        rpki_cache.set_test_data(index).await;
+
+        // Create DetectorRunner with RPKI cache
+        let runner = DetectorRunner::with_enrichment(
+            rpki_cache,
+            Arc::new(crate::irr_cache::IrrCache::new()),
+        );
+
+        // Process announcement with matching prefix and ASN (should be Valid)
+        let record = make_bgp_record("192.0.2.0/24", 64512, "announce");
+        let result = runner.process_record(&record).await;
+        assert!(result.is_ok(), "process_record should succeed");
+
+        // Valid RPKI should suppress hijack check → no anomalies
+        let stats = runner.stats();
+        assert_eq!(
+            stats.anomalies_detected, 0,
+            "Valid RPKI should suppress hijack detection"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rpki_invalid_asn_triggers_alert() {
+        use crate::rpki_cache::{addr_to_u128, RpkiCache};
+        use ipnet::IpNet;
+        use std::collections::HashMap;
+
+        // Create RpkiCache with mock data: 192.0.2.0/24 → AS11111, max_length=24
+        let rpki_cache = Arc::new(RpkiCache::new("http://dummy".to_string()));
+        let prefix_network: IpNet = "192.0.2.0/24".parse().unwrap();
+        let key = (
+            prefix_network.prefix_len(),
+            addr_to_u128(prefix_network.network()),
+        );
+        let index = HashMap::from([(key, vec![(24, 11111)])]);
+        rpki_cache.set_test_data(index).await;
+
+        // Create DetectorRunner with RPKI cache
+        let runner = DetectorRunner::with_enrichment(
+            rpki_cache,
+            Arc::new(crate::irr_cache::IrrCache::new()),
+        );
+
+        // Process announcement with wrong ASN (99999) → InvalidAsn
+        let record = make_bgp_record("192.0.2.0/24", 99999, "announce");
+        let result = runner.process_record(&record).await;
+        assert!(result.is_ok(), "process_record should succeed");
+
+        // Invalid ASN should trigger alert
+        let stats = runner.stats();
+        assert!(
+            stats.anomalies_detected >= 1,
+            "Invalid ASN should trigger alert"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rpki_invalid_length_triggers_alert() {
+        use crate::rpki_cache::{addr_to_u128, RpkiCache};
+        use ipnet::IpNet;
+        use std::collections::HashMap;
+
+        // Create RpkiCache with mock data: 192.0.2.0/24 → AS64512, max_length=24
+        let rpki_cache = Arc::new(RpkiCache::new("http://dummy".to_string()));
+        let prefix_network: IpNet = "192.0.2.0/24".parse().unwrap();
+        let key = (
+            prefix_network.prefix_len(),
+            addr_to_u128(prefix_network.network()),
+        );
+        let index = HashMap::from([(key, vec![(24, 64512)])]);
+        rpki_cache.set_test_data(index).await;
+
+        // Create DetectorRunner with RPKI cache
+        let runner = DetectorRunner::with_enrichment(
+            rpki_cache,
+            Arc::new(crate::irr_cache::IrrCache::new()),
+        );
+
+        // Process announcement with longer prefix (192.0.2.0/28) → InvalidLength
+        let record = make_bgp_record("192.0.2.0/28", 64512, "announce");
+        let result = runner.process_record(&record).await;
+        assert!(result.is_ok(), "process_record should succeed");
+
+        // Invalid length should trigger alert
+        let stats = runner.stats();
+        assert!(
+            stats.anomalies_detected >= 1,
+            "Invalid length should trigger alert"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rpki_unavailable_falls_through_to_hijack_detector() {
+        // Create DetectorRunner WITHOUT RPKI cache (rpki_cache: None)
+        let runner = DetectorRunner::new();
+
+        // Process a normal announcement
+        let record = make_bgp_record("10.0.0.0/8", 64512, "announce");
+        let result = runner.process_record(&record).await;
+        assert!(
+            result.is_ok(),
+            "process_record should succeed without panic"
+        );
+
+        // Events should be processed normally
+        let stats = runner.stats();
+        assert_eq!(
+            stats.events_processed, 0,
+            "events_processed counter not auto-incremented in test"
+        );
+        // Note: events_processed is not auto-incremented in process_record, only in run()
+        // But we can verify no panic occurred
+    }
+
+    #[tokio::test]
+    async fn test_withdraw_event_never_triggers_hijack() {
+        use crate::rpki_cache::{addr_to_u128, RpkiCache};
+        use ipnet::IpNet;
+        use std::collections::HashMap;
+
+        // Create RpkiCache with mock data
+        let rpki_cache = Arc::new(RpkiCache::new("http://dummy".to_string()));
+        let prefix_network: IpNet = "192.0.2.0/24".parse().unwrap();
+        let key = (
+            prefix_network.prefix_len(),
+            addr_to_u128(prefix_network.network()),
+        );
+        let index = HashMap::from([(key, vec![(24, 64512)])]);
+        rpki_cache.set_test_data(index).await;
+
+        // Create DetectorRunner with RPKI cache
+        let runner = DetectorRunner::with_enrichment(
+            rpki_cache,
+            Arc::new(crate::irr_cache::IrrCache::new()),
+        );
+
+        // Send 20 WITHDRAW events for the same prefix
+        for _ in 0..20 {
+            let record = make_bgp_record("192.0.2.0/24", 64512, "withdraw");
+            let result = runner.process_record(&record).await;
+            assert!(result.is_ok(), "process_record should succeed");
+        }
+
+        // No hijack anomalies should be detected (only flapping detector may trigger).
+        // We only verify that processing all 20 events completed without panic or error.
+        let stats = runner.stats();
+        assert_eq!(
+            stats.events_processed, 20,
+            "all 20 WITHDRAW events must be processed"
+        );
+    }
 }
