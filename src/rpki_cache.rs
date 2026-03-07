@@ -205,6 +205,13 @@ impl RpkiCache {
             RpkiStatus::NotFound
         }
     }
+
+    /// Test/benchmark helper: directly populate the VRP index with mock data.
+    /// Not intended for production use.
+    pub async fn set_test_data(&self, index: HashMap<(u8, u128), Vec<(u8, u32)>>) {
+        let mut write_guard = self.vrp_index.write().await;
+        *write_guard = index;
+    }
 }
 
 /// Top-level response from Routinator's /json endpoint.
@@ -234,7 +241,7 @@ fn parse_asn(asn_str: &str) -> Result<u32, anyhow::Error> {
 
 /// Converts an IP address to a u128 representation.
 /// IPv4 addresses are mapped to IPv6 (::ffff:a.b.c.d) and then converted to u128.
-fn addr_to_u128(addr: std::net::IpAddr) -> u128 {
+pub(crate) fn addr_to_u128(addr: std::net::IpAddr) -> u128 {
     match addr {
         std::net::IpAddr::V4(v4) => v4.to_ipv6_mapped().to_bits(),
         std::net::IpAddr::V6(v6) => v6.to_bits(),
@@ -366,6 +373,150 @@ mod tests {
         assert_eq!(
             cache.validate("2001:db8::/48", 99999),
             RpkiStatus::InvalidAsn
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_hierarchical_supernet_coverage() {
+        let cache = RpkiCache::new("http://dummy".to_string());
+        {
+            let mut index = cache.vrp_index.write().await;
+            *index = HashMap::from([(
+                (8, addr_to_u128("10.0.0.0".parse().unwrap())),
+                vec![(24, 64512)],
+            )]);
+        }
+
+        // /24 announcement covered by /8 VRP with max_length=24
+        assert_eq!(cache.validate("10.1.2.0/24", 64512), RpkiStatus::Valid);
+    }
+
+    #[tokio::test]
+    async fn test_validate_supernet_too_specific() {
+        let cache = RpkiCache::new("http://dummy".to_string());
+        {
+            let mut index = cache.vrp_index.write().await;
+            *index = HashMap::from([(
+                (8, addr_to_u128("10.0.0.0".parse().unwrap())),
+                vec![(16, 64512)],
+            )]);
+        }
+
+        // /24 announcement exceeds max_length=16
+        assert_eq!(
+            cache.validate("10.1.0.0/24", 64512),
+            RpkiStatus::InvalidLength
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_supernet_wrong_asn() {
+        let cache = RpkiCache::new("http://dummy".to_string());
+        {
+            let mut index = cache.vrp_index.write().await;
+            *index = HashMap::from([(
+                (8, addr_to_u128("10.0.0.0".parse().unwrap())),
+                vec![(24, 64512)],
+            )]);
+        }
+
+        // /24 announcement covered by /8 VRP but wrong ASN
+        assert_eq!(cache.validate("10.1.2.0/24", 99999), RpkiStatus::InvalidAsn);
+    }
+
+    #[tokio::test]
+    async fn test_validate_multiple_covering_vrps_one_matches() {
+        let cache = RpkiCache::new("http://dummy".to_string());
+        {
+            let mut index = cache.vrp_index.write().await;
+            *index = HashMap::from([
+                (
+                    (16, addr_to_u128("10.1.0.0".parse().unwrap())),
+                    vec![(24, 11111)],
+                ),
+                (
+                    (8, addr_to_u128("10.0.0.0".parse().unwrap())),
+                    vec![(24, 64512)],
+                ),
+            ]);
+        }
+
+        // /24 announcement: /16 matches length but wrong AS, /8 matches correctly
+        assert_eq!(cache.validate("10.1.2.0/24", 64512), RpkiStatus::Valid);
+    }
+
+    #[tokio::test]
+    async fn test_validate_concurrent_reads_during_write() {
+        let cache = RpkiCache::new("http://dummy".to_string());
+        // Start with some data
+        {
+            let mut index = cache.vrp_index.write().await;
+            *index = HashMap::from([(
+                (24, addr_to_u128("192.0.2.0".parse().unwrap())),
+                vec![(24, 64512)],
+            )]);
+        }
+
+        // Spawn a writer task that will update the index after a short delay
+        let cache_clone = cache.clone();
+        let writer = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let mut index = cache_clone.vrp_index.write().await;
+            *index = HashMap::from([(
+                (24, addr_to_u128("203.0.113.0".parse().unwrap())),
+                vec![(24, 65536)],
+            )]);
+        });
+
+        // Spawn 50 reader tasks that call validate concurrently
+        let mut readers = Vec::new();
+        for _ in 0..50 {
+            let cache_clone = cache.clone();
+            readers.push(tokio::spawn(async move {
+                // validate may return Unavailable if try_read fails, but should not panic
+                let _ = cache_clone.validate("192.0.2.0/24", 64512);
+            }));
+        }
+
+        // Wait for all readers
+        for reader in readers {
+            reader.await.expect("reader task panicked");
+        }
+
+        // Wait for writer
+        writer.await.expect("writer task panicked");
+
+        // After write, new data should be visible
+        assert_eq!(cache.validate("203.0.113.0/24", 65536), RpkiStatus::Valid);
+    }
+
+    #[tokio::test]
+    async fn test_validate_ipv4_classful_supernet() {
+        let cache = RpkiCache::new("http://dummy".to_string());
+        {
+            let mut index = cache.vrp_index.write().await;
+            *index = HashMap::from([(
+                (16, addr_to_u128("192.168.0.0".parse().unwrap())),
+                vec![(24, 1234)],
+            )]);
+        }
+
+        // Valid: /24 within max_length=24
+        assert_eq!(cache.validate("192.168.1.0/24", 1234), RpkiStatus::Valid);
+        // InvalidLength: /25 exceeds max_length=24
+        assert_eq!(
+            cache.validate("192.168.1.0/25", 1234),
+            RpkiStatus::InvalidLength
+        );
+        // InvalidAsn: correct prefix but wrong AS
+        assert_eq!(
+            cache.validate("192.168.1.0/24", 9999),
+            RpkiStatus::InvalidAsn
+        );
+        // NotFound: different network
+        assert_eq!(
+            cache.validate("198.51.100.0/24", 1234),
+            RpkiStatus::NotFound
         );
     }
 }
