@@ -21,6 +21,7 @@ pub mod baseline_model;
 pub mod bgp_query;
 pub mod cache;
 pub mod clickhouse_exporter;
+pub mod collector_registry;
 pub mod config;
 pub mod cost_reporter;
 pub mod cost_tracker;

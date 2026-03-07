@@ -384,4 +384,76 @@ mod tests {
 
         assert!(extract_bgp_record(&event).is_none());
     }
+
+    #[test]
+    fn test_extract_collector_and_peer_ip() {
+        let event = BgpEvent {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            level: "info".to_string(),
+            source: "ripe-ris".to_string(),
+            message: "ANNOUNCE 8.8.8.0/24".to_string(),
+            metadata: Some(serde_json::json!({
+                "event_type": "announce",
+                "prefix":     "8.8.8.0/24",
+                "peer_asn":   1103_u64,
+                "origin_as":  15169_u64,
+                "peer_ip":    "80.249.211.0",
+                "as_path":    [1103_u64, 3356_u64, 15169_u64],
+                "collector":  "rrc12",
+            })),
+        };
+        let record = extract_bgp_record(&event).unwrap();
+        assert_eq!(record.collector, "rrc12");
+        assert_eq!(record.peer_ip, "80.249.211.0");
+        assert_eq!(record.origin_as, 15169);
+    }
+
+    #[test]
+    fn test_extract_collector_fallback_to_unknown() {
+        let event = BgpEvent {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            level: "info".to_string(),
+            source: "ripe-ris".to_string(),
+            message: "ANNOUNCE 1.0.0.0/24".to_string(),
+            metadata: Some(serde_json::json!({
+                "event_type": "announce",
+                "prefix":     "1.0.0.0/24",
+                "peer_asn":   64512_u64,
+                "origin_as":  64512_u64,
+                "peer_ip":    "",
+                "as_path":    [64512_u64],
+                // kein "collector"-Feld
+            })),
+        };
+        let record = extract_bgp_record(&event).unwrap();
+        assert_eq!(record.collector, "unknown");
+        assert_eq!(record.peer_ip, "");
+    }
+
+    #[test]
+    fn test_extract_different_collectors() {
+        let make_event = |collector: &str, prefix: &str| BgpEvent {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            level: "info".to_string(),
+            source: "ripe-ris".to_string(),
+            message: format!("ANNOUNCE {prefix}"),
+            metadata: Some(serde_json::json!({
+                "event_type": "announce",
+                "prefix":     prefix,
+                "peer_asn":   1103_u64,
+                "origin_as":  15169_u64,
+                "peer_ip":    "10.0.0.1",
+                "as_path":    [1103_u64, 15169_u64],
+                "collector":  collector,
+            })),
+        };
+        let r1 = extract_bgp_record(&make_event("rrc00", "8.8.8.0/24")).unwrap();
+        let r2 = extract_bgp_record(&make_event("rrc17", "8.8.8.0/24")).unwrap();
+        assert_eq!(r1.collector, "rrc00");
+        assert_eq!(r2.collector, "rrc17");
+        assert_ne!(r1.collector, r2.collector);
+    }
 }

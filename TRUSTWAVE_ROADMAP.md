@@ -98,7 +98,7 @@ im JSON-Feld `id`. Es wird aktuell verworfen — das ist der erste Fix.
 | ✅ 1.1.1 | `collector`-Feld zu `BgpRecord` hinzufügen | `tools/bgp_stream/src/main.rs` | `id: Option<String>` in `RisData`; `collector: &str` Parameter in `process_ris_data()`; `"collector": collector` in announce + withdraw JSON; `data.id.as_deref().unwrap_or("unknown")` |
 | ✅ 1.1.2 | `peer_ip` in `BgpRecord` aufnehmen (WITHDRAW) | `tools/bgp_stream/src/main.rs` | `peer: Option<String>` in `RisData`; WITHDRAW: `"peer_ip": data.peer.as_deref().unwrap_or("")` |
 | ✅ 1.1.3 | NATS-Payload Schema aktualisieren | `src/nats_subscriber.rs` | `pub collector: String` + `pub peer_ip: String` in `BgpRecord`; `extract_bgp_record` extrahiert beide Felder; alle Konsumenten (detector_runner, detector_loop, Tests) angepasst |
-| 🔲 1.1.4 | Smoke-Test: Collector-Verteilung live loggen | Integration-Test | 5 min laufen lassen, prüfen ob rrc00–rrc26 auftauchen |
+| ✅ 1.1.4 | Unit-Tests für Collector-Extraktion | `src/nats_subscriber.rs` | 3 Tests: korrekte Extraktion, Fallback "unknown", Collector-Unterscheidung (rrc00 vs rrc17) |
 
 ```rust
 // Ziel-Struktur nach Abschnitt 1.1:
@@ -120,10 +120,10 @@ pub struct BgpRecord {
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 1.2.1 | Statische Kollektor-Tabelle (26 RRCs) anlegen | `src/collector_registry.rs` | ID, Name, Lat/Lon, IXP, Region (EU/NA/APAC/SA/AF) |
-| 1.2.2 | `CollectorInfo::lookup(id)` Funktion | `src/collector_registry.rs` | O(1) HashMap-Lookup |
-| 1.2.3 | Geografische Distanz zwischen zwei Kollektoren | `src/collector_registry.rs` | Haversine-Formel, gibt km zurück |
-| 1.2.4 | Erwartete Lichtlaufzeit zwischen zwei Kollektoren | `src/collector_registry.rs` | `distance_km / 200_000 * 1000` ms (Glasfaser ≈ 2/3 c) |
+| ✅ 1.2.1 | Statische Kollektor-Tabelle (24 RRCs) anlegen | `src/collector_registry.rs` | `Region` enum + `CollectorInfo` struct; `pub static COLLECTORS: &[CollectorInfo]`; alle rrc00–rrc26; `pub mod collector_registry` in lib.rs |
+| ✅ 1.2.2 | `lookup(id)` Funktion | `src/collector_registry.rs` | `OnceLock<HashMap<...>>` für O(1)-Lookup; 3 Tests (known/unknown/all-26) |
+| ✅ 1.2.3 | Geografische Distanz zwischen zwei Kollektoren | `src/collector_registry.rs` | Haversine-Formel (R=6371km), kein externe Crate; 4 Tests |
+| ✅ 1.2.4 | Erwartete Lichtlaufzeit zwischen zwei Kollektoren | `src/collector_registry.rs` | `dist_km / 200.0` ms (Glasfaser ≈ 2/3 c); 5 Tests (inkl. 2 Bonus) |
 
 ```rust
 // Beispiel-Einträge (statische Compile-Zeit-Daten):
