@@ -86,7 +86,8 @@ impl RpkiCache {
         client: &reqwest::Client,
         routinator_url: &str,
     ) -> Result<(), anyhow::Error> {
-        let url = format!("{}/api/v1/vrps", routinator_url);
+        // Routinator 0.15+ uses /json (with metadata+roas wrapper)
+        let url = format!("{}/json", routinator_url);
         let response = client.get(&url).send().await?;
 
         if !response.status().is_success() {
@@ -94,7 +95,8 @@ impl RpkiCache {
         }
 
         let json_text = response.text().await?;
-        let raw_vrps: Vec<RawVrp> = serde_json::from_str(&json_text)?;
+        let wrapper: RoutinatorResponse = serde_json::from_str(&json_text)?;
+        let raw_vrps = wrapper.roas;
 
         let mut new_table = Vec::with_capacity(raw_vrps.len());
 
@@ -191,10 +193,17 @@ impl RpkiCache {
     }
 }
 
-/// Raw VRP as returned by Routinator's /api/v1/vrps endpoint.
+/// Top-level response from Routinator's /json endpoint.
+#[derive(Debug, Deserialize)]
+struct RoutinatorResponse {
+    roas: Vec<RawVrp>,
+}
+
+/// Raw VRP as returned by Routinator's /json endpoint.
 #[derive(Debug, Deserialize)]
 struct RawVrp {
     prefix: String,
+    #[serde(rename = "maxLength")]
     max_length: u8,
     asn: String,
 }
