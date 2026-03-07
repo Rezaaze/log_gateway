@@ -326,7 +326,7 @@ services:
     networks:
       - gateway-net
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 1.5g   # 825k VRPs benötigen ~1-1.5GB — 512m reicht nicht (Validation hängt bei 98%)
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8323/api/v1/status || exit 1"]
       interval: 30s
