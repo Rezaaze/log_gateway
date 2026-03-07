@@ -565,7 +565,7 @@ pub async fn run_rpki_enrichment(
 
         // Validate against RPKI once — reuse the result for both metrics and
         // hijack detection to avoid querying Routinator twice per event.
-        let rpki_status = rpki_cache.validate(&record.prefix, record.origin_as).await;
+        let rpki_status = rpki_cache.validate(&record.prefix, record.origin_as);
         match &rpki_status {
             RpkiStatus::Valid => metrics.record_rpki_valid(),
             RpkiStatus::InvalidAsn | RpkiStatus::InvalidLength => metrics.record_rpki_invalid(),
