@@ -254,7 +254,9 @@ Cold Tier (S3):
   ```yaml
   bgp-stream:
     environment:
-      NATS_URL: "nats://nats:4222"
+      NATS_URL: "nats://bgp-stream:bgp-stream@localhost:4222"
+      # network_mode: host: Docker-DNS nicht verfügbar → localhost statt nats
+      # Credentials: BGP-Account aus deploy/nats/nats.conf (bgp-stream:bgp-stream)
       BATCH_SIZE: "1000"  # Can be larger now (no HTTP overhead)
       BATCH_TIMEOUT_MS: "10"  # Can be faster (NATS is local)
   ```

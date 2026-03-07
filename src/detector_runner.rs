@@ -336,18 +336,8 @@ impl DetectorRunner {
                     }
                 }
             } else {
-                // For WITHDRAW events, use basic hijack detection without RPKI
-                if let Some(anomaly) = self.hijack_detector.check(&bgp_record) {
-                    self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
-                    self.metrics.record_anomaly("hijack");
-                    tracing::warn!(
-                        "Hijack detected (withdraw event): prefix={}, origin_as={}, confidence={:.2}, details={}",
-                        anomaly.prefix,
-                        anomaly.origin_as,
-                        anomaly.confidence,
-                        anomaly.details
-                    );
-                }
+                // WITHDRAW events: kein Hijack-Check ohne RPKI-Beweis
+                // Ein Withdraw allein ist kein Anzeichen eines Hijacks.
             }
         } else {
             // No RPKI cache available, use basic hijack detection

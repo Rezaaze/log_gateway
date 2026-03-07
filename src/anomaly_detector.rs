@@ -246,15 +246,15 @@ impl Detector for Arc<HijackDetector> {
 /// Detects prefix flapping (rapid announcements/withdrawals).
 #[derive(Debug, Default)]
 pub struct FlappingDetector {
-    /// Maps prefix → recent event timestamps within the sliding window.
-    prefix_to_timestamps: DashMap<String, VecDeque<DateTime<Utc>>>,
+    /// Maps prefix → recent event timestamps and types within the sliding window.
+    prefix_to_events: DashMap<String, VecDeque<(DateTime<Utc>, String)>>,
 }
 
 impl FlappingDetector {
     /// Creates a new flapping detector.
     pub fn new() -> Self {
         Self {
-            prefix_to_timestamps: DashMap::new(),
+            prefix_to_events: DashMap::new(),
         }
     }
 }
@@ -266,46 +266,68 @@ impl Detector for FlappingDetector {
 
     fn check(&self, event: &BgpClickHouseRecord) -> Option<Anomaly> {
         const FLAP_WINDOW_SECS: u64 = 300; // 5-minute window
-        const FLAP_THRESHOLD: usize = 10; // 10 events = flapping
+        const FLAP_THRESHOLD: usize = 50; // 50 events in 5min (was 10)
+        const MIN_DIRECTION_CHANGES: usize = 6; // Minimum direction changes for oscillation
 
         let prefix = &event.prefix;
         let now = Utc::now();
 
-        // Get or create the timestamp queue for this prefix.
-        let entry = self.prefix_to_timestamps.entry(prefix.clone());
-        let mut timestamps = entry.or_insert_with(VecDeque::new);
+        // Get or create the event queue for this prefix.
+        let entry = self.prefix_to_events.entry(prefix.clone());
+        let mut events = entry.or_insert_with(VecDeque::new);
 
-        // Add current event timestamp.
-        timestamps.push_back(event.timestamp);
+        // Add current event with its type.
+        events.push_back((event.timestamp, event.event_type.clone()));
 
-        // Remove timestamps outside the sliding window.
+        // Remove events outside the sliding window.
         let cutoff = now - chrono::Duration::seconds(FLAP_WINDOW_SECS as i64);
-        while timestamps.front().is_some_and(|&ts| ts < cutoff) {
-            timestamps.pop_front();
+        while events.front().is_some_and(|&(ts, _)| ts < cutoff) {
+            events.pop_front();
         }
 
-        // Check if we've exceeded the threshold.
-        if timestamps.len() >= FLAP_THRESHOLD {
-            let details = format!(
-                "Prefix {} had {} events in the last {} seconds",
-                prefix,
-                timestamps.len(),
-                FLAP_WINDOW_SECS
-            );
-
-            Some(Anomaly {
-                id: Uuid::new_v4(),
-                anomaly_type: AnomalyType::PrefixFlapping,
-                prefix: prefix.clone(),
-                origin_as: event.origin_as,
-                confidence: 0.75,
-                detected_at: now,
-                details,
-                tenant_id: event.tenant_id.clone(),
-            })
-        } else {
-            None
+        // Check BOTH conditions:
+        // 1. Frequency condition: enough events in the window
+        if events.len() < FLAP_THRESHOLD {
+            return None;
         }
+
+        // 2. Oscillation condition: count direction changes
+        let mut direction_changes = 0;
+        let mut prev_event_type: Option<&str> = None;
+
+        for (_, event_type) in events.iter() {
+            if let Some(prev) = prev_event_type {
+                if prev != event_type {
+                    direction_changes += 1;
+                }
+            }
+            prev_event_type = Some(event_type);
+        }
+
+        // Need at least MIN_DIRECTION_CHANGES direction changes
+        if direction_changes < MIN_DIRECTION_CHANGES {
+            return None;
+        }
+
+        // Both conditions satisfied → flapping detected
+        let details = format!(
+            "Prefix {} had {} events with {} direction changes in the last {} seconds",
+            prefix,
+            events.len(),
+            direction_changes,
+            FLAP_WINDOW_SECS
+        );
+
+        Some(Anomaly {
+            id: Uuid::new_v4(),
+            anomaly_type: AnomalyType::PrefixFlapping,
+            prefix: prefix.clone(),
+            origin_as: event.origin_as,
+            confidence: 0.75,
+            detected_at: now,
+            details,
+            tenant_id: event.tenant_id.clone(),
+        })
     }
 }
 
