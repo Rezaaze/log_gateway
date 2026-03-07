@@ -28,6 +28,8 @@ fn make_bgp_record(prefix: &str, origin_as: u32, event_type: &str) -> BgpRecord 
         event_type: event_type.to_string(),
         as_path: vec![1234, origin_as],
         timestamp: chrono::Utc::now(),
+        collector: "unknown".to_string(),
+        peer_ip: "".to_string(),
     }
 }
 

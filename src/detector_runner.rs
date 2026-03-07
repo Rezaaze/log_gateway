@@ -53,7 +53,7 @@ pub struct DetectedAnomaly {
 ///         origin_as: record.origin_as,
 ///         as_path: record.as_path.clone(),
 ///         peer_asn: record.peer_asn,
-///         peer_ip: String::new(), // Not available from NATS
+///         peer_ip: record.peer_ip.clone(), // Available from NATS since Phase 1.1
 ///         community: Vec::new(),  // Not available from NATS
 ///         source: "nats-stream".to_string(),
 ///         tenant_id: "bgp".to_string(),
@@ -488,6 +488,8 @@ mod tests {
                 event_type: bgp_record.event_type.clone(),
                 as_path: bgp_record.as_path.clone(),
                 timestamp: bgp_record.timestamp,
+                collector: "unknown".to_string(),
+                peer_ip: "".to_string(),
             })
             .await;
 
@@ -530,6 +532,8 @@ mod tests {
                 event_type: record1.event_type.clone(),
                 as_path: record1.as_path.clone(),
                 timestamp: record1.timestamp,
+                collector: "unknown".to_string(),
+                peer_ip: "".to_string(),
             })
             .await;
 
@@ -556,6 +560,8 @@ mod tests {
                 event_type: record2.event_type.clone(),
                 as_path: record2.as_path.clone(),
                 timestamp: record2.timestamp,
+                collector: "unknown".to_string(),
+                peer_ip: "".to_string(),
             })
             .await;
 
@@ -578,6 +584,8 @@ mod tests {
             event_type: event_type.to_string(),
             as_path: vec![64512, origin_as],
             timestamp: Utc::now(),
+            collector: "unknown".to_string(),
+            peer_ip: "".to_string(),
         }
     }
 

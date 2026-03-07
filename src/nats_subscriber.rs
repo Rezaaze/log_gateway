@@ -36,6 +36,8 @@ pub struct BgpRecord {
     pub event_type: String, // "announce" or "withdraw"
     pub as_path: Vec<u32>,
     pub timestamp: DateTime<Utc>,
+    pub collector: String, // e.g., "rrc12", fallback: "unknown"
+    pub peer_ip: String,   // e.g., "80.249.211.0", fallback: ""
 }
 
 /// Configuration for NATS subscriber
@@ -62,6 +64,8 @@ impl Default for SubscriberConfig {
 /// - peer_asn: u32 peer ASN
 /// - event_type: "announce" or "withdraw"
 /// - as_path: array of u32 ASNs
+/// - collector: collector name (e.g., "rrc12"), fallback: "unknown"
+/// - peer_ip: peer IP address, fallback: ""
 pub fn extract_bgp_record(event: &BgpEvent) -> Option<BgpRecord> {
     let metadata = event.metadata.as_ref()?;
 
@@ -80,6 +84,17 @@ pub fn extract_bgp_record(event: &BgpEvent) -> Option<BgpRecord> {
         })
         .unwrap_or_default();
 
+    let collector = metadata
+        .get("collector")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let peer_ip = metadata
+        .get("peer_ip")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
     Some(BgpRecord {
         prefix,
         origin_as,
@@ -87,6 +102,8 @@ pub fn extract_bgp_record(event: &BgpEvent) -> Option<BgpRecord> {
         event_type,
         as_path,
         timestamp: event.timestamp,
+        collector,
+        peer_ip,
     })
 }
 

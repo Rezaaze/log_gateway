@@ -95,10 +95,10 @@ im JSON-Feld `id`. Es wird aktuell verworfen — das ist der erste Fix.
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 1.1.1 | `collector`-Feld zu `BgpRecord` hinzufügen | `tools/bgp_stream/src/main.rs` | `pub collector: String` — aus `msg["id"]` extrahieren |
-| 1.1.2 | `peer_asn` und `peer_ip` in `BgpRecord` aufnehmen | `tools/bgp_stream/src/main.rs` | Für spätere Peer-Analyse |
-| 1.1.3 | NATS-Payload Schema aktualisieren | `src/models.rs` | `BgpRecord` struct erweitern, alle Konsumenten anpassen |
-| 1.1.4 | Smoke-Test: Collector-Verteilung live loggen | Integration-Test | 5 min laufen lassen, prüfen ob rrc00–rrc26 auftauchen |
+| ✅ 1.1.1 | `collector`-Feld zu `BgpRecord` hinzufügen | `tools/bgp_stream/src/main.rs` | `id: Option<String>` in `RisData`; `collector: &str` Parameter in `process_ris_data()`; `"collector": collector` in announce + withdraw JSON; `data.id.as_deref().unwrap_or("unknown")` |
+| ✅ 1.1.2 | `peer_ip` in `BgpRecord` aufnehmen (WITHDRAW) | `tools/bgp_stream/src/main.rs` | `peer: Option<String>` in `RisData`; WITHDRAW: `"peer_ip": data.peer.as_deref().unwrap_or("")` |
+| ✅ 1.1.3 | NATS-Payload Schema aktualisieren | `src/nats_subscriber.rs` | `pub collector: String` + `pub peer_ip: String` in `BgpRecord`; `extract_bgp_record` extrahiert beide Felder; alle Konsumenten (detector_runner, detector_loop, Tests) angepasst |
+| 🔲 1.1.4 | Smoke-Test: Collector-Verteilung live loggen | Integration-Test | 5 min laufen lassen, prüfen ob rrc00–rrc26 auftauchen |
 
 ```rust
 // Ziel-Struktur nach Abschnitt 1.1:

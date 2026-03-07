@@ -232,6 +232,8 @@ mod tests {
             event_type: "announce".to_string(),
             as_path: vec![64513, 64512],
             timestamp: Utc::now(),
+            collector: "unknown".to_string(),
+            peer_ip: "".to_string(),
         }
     }
 
