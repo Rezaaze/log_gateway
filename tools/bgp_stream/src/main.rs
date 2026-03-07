@@ -166,7 +166,7 @@ struct RisData {
     path: Option<Vec<Value>>, // can be nested (AS-sets)
     announcements: Option<Vec<Announcement>>,
     withdrawals: Option<Vec<String>>,
-    peer: Option<String>,     // Peer-IP-Adresse, z.B. "80.249.211.0"
+    peer: Option<String>, // Peer-IP-Adresse, z.B. "80.249.211.0"
 }
 
 #[derive(Deserialize, Debug)]
@@ -468,7 +468,14 @@ async fn bgp_stream_task(
                         Ok(ris_msg) if ris_msg.msg_type == "ris_message" => {
                             if let Some(data) = &ris_msg.data {
                                 let collector = data.id.as_deref().unwrap_or("unknown");
-                                process_ris_data(data, &known, &tx, &stats, cfg.sample_rate, collector);
+                                process_ris_data(
+                                    data,
+                                    &known,
+                                    &tx,
+                                    &stats,
+                                    cfg.sample_rate,
+                                    collector,
+                                );
                             }
                         }
                         Ok(_) => {}  // ris_subscribe_ok or other control messages

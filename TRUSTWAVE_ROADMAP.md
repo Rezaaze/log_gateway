@@ -176,10 +176,10 @@ RIPE stellt MRT-Files öffentlich bereit — kostenlos, seit 2001.
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 1.4.1 | MRT-Crate evaluieren und einbinden | `Cargo.toml` | `bgpkit-parser` (Rust, aktiv gepflegt, MRT + BMP Support) |
-| 1.4.2 | CLI-Tool: MRT-File → PropagationEvents (JSON-Lines) | `tools/mrt_replay/` | Neues Workspace-Member |
-| 1.4.3 | Download-Script für RIPE RIS Archive 2022–2025 | `scripts/download_mrt.sh` | `https://data.ris.ripe.net/rrcXX/` — alle 26 Kollektoren |
-| 1.4.4 | Gleiche `BgpRecord`-Struktur wie Live-Feed | `tools/mrt_replay/` | Gleicher Code-Pfad für Live und Historisch |
+| ✅ 1.4.1 | MRT-Crate einbinden + Workspace-Member | `Cargo.toml`, `tools/mrt_replay/Cargo.toml` | `bgpkit-parser = "0.10"` + clap/serde/tracing; bgp_stream `[workspace]` bereinigt |
+| ✅ 1.4.2 | CLI-Tool: MRT-File → JSON-Lines | `tools/mrt_replay/src/main.rs` | `BgpkitParser`, alle 8 Pflichtfelder, Progress-Log 100k, besseres Error-Handling, Bonus: Collector aus Dateiname |
+| ✅ 1.4.3 | Download-Script für RIPE RIS Archive | `scripts/download_mrt.sh` | 30 Tage/4 Kollektoren Standard; macOS+Linux kompatibel; idempotent; ausführbar |
+| ✅ 1.4.4 | Output-Format mit Live-Feed vereinheitlicht | `tools/mrt_replay/src/main.rs` | `//! # Output-Format` Doku; 2 Tests (required fields + non-empty collector) |
 
 ```bash
 # Datenquelle: RIPE RIS Archive (öffentlich, kostenlos)

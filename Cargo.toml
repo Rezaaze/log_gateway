@@ -1,5 +1,9 @@
 [workspace]
-members = ["."]
+members = [
+    ".",
+    "tools/bgp_stream",
+    "tools/mrt_replay",
+]
 resolver = "2"
 
 [package]
