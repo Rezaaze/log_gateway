@@ -1,6 +1,7 @@
 # BGP TrustWave — Technische Implementierungs-Roadmap
 
 **Stand:** 08.03.2026
+**Letztes Update:** 08.03.2026
 **Vertraulich** — Alle Gespräche nur unter NDA
 **Prinzip:** Jede Phase liefert einen messbaren Beweis. Kein nächster Schritt ohne erfolgreichen Meilenstein.
 
@@ -8,16 +9,16 @@
 
 ## Übersicht
 
-| Phase | Titel | Zeitraum | Ziel |
-|---|---|---|---|
-| 0 | IP-Schutz & Projekt-Reset | Woche 1 | Rechtlich absichern, Fokus setzen |
-| 1 | Daten-Fundament | Woche 2–4 | Rohdaten korrekt erfassen |
-| 2 | Wellenbaseline | Woche 4–8 | Normales Propagationsverhalten modellieren |
-| 3 | Wave Anomaly Detector | Woche 8–12 | Hijacks durch Wellenabweichung erkennen |
-| 4 | Trust Score Engine | Woche 12–16 | Alle Signale zu einem Score kombinieren |
-| 5 | Echtzeit-System | Monat 4–6 | Live-Betrieb, Validierung |
-| 6 | BGP-Speaker & Pilot | Monat 6–9 | Aktives Routing, erster Kunde |
-| 7 | Produktreife | Monat 9–18 | Skalierung, Zertifizierungen |
+| Phase | Titel | Zeitraum | Ziel | Status |
+|---|---|---|---|---|
+| 0 | IP-Schutz & Projekt-Reset | Woche 1 | Rechtlich absichern, Fokus setzen | ⏳ Teilweise erledigt |
+| 1 | Daten-Fundament | Woche 2–4 | Rohdaten korrekt erfassen | 🔲 Offen |
+| 2 | Wellenbaseline | Woche 4–8 | Normales Propagationsverhalten modellieren | 🔲 Offen |
+| 3 | Wave Anomaly Detector | Woche 8–12 | Hijacks durch Wellenabweichung erkennen | 🔲 Offen |
+| 4 | Trust Score Engine | Woche 12–16 | Alle Signale zu einem Score kombinieren | 🔲 Offen |
+| 5 | Echtzeit-System | Monat 4–6 | Live-Betrieb, Validierung | 🔲 Offen |
+| 6 | BGP-Speaker & Pilot | Monat 6–9 | Aktives Routing, erster Kunde | 🔲 Offen |
+| 7 | Produktreife | Monat 9–18 | Skalierung, Zertifizierungen | 🔲 Offen |
 
 ### Technische Kernidee
 
@@ -60,20 +61,27 @@ HIJACK:
 ---
 
 ## Phase 0 — IP-Schutz & Projekt-Reset
-**Woche 1 | Vor allem anderen**
+**Woche 1 | ⏳ Teilweise erledigt — 08.03.2026**
 
 > Bevor eine Zeile Code geschrieben wird: Die Kombination aus Wellenphysik,
 > Kollektor-Triangulation und Trust-Score-Degradierung für BGP existiert so
 > nirgendwo. Dieser Vorsprung muss datiert und geschützt sein.
 
-| # | Task | Output |
-|---|---|---|
-| 0.1 | Konzeptdokument (Wellenphysik + Kollektor-Triangulation) notariell datieren | Datiertes Dokument mit Urheberschaft |
-| 0.2 | Feature-Freeze auf log-gateway: kein neues Feature mehr am alten System | Klarer Scope, kein Ressourcen-Verlust |
-| 0.3 | Neuer Branch `trustwave-core` — TrustWave-Entwicklung getrennt | Git-Branch, saubere History |
-| 0.4 | NDA-Template erstellen für alle Expertengespräche | NDA-Dokument, Anwalt geprüft |
+| # | Status | Task | Output | Erledigt am |
+|---|---|---|---|---|
+| 0.1 | ✅ | Konzeptdokument erstellt (`docs/KONZEPTDOKUMENT.md`) | Druckfertig für Notar, 08.03.2026 datiert | 08.03.2026 |
+| 0.1 | ⏳ | Konzeptdokument notariell beglaubigen lassen | Notariell datiertes Original | — Ausstehend (menschliche Aktion) |
+| 0.2 | ✅ | Feature-Freeze dokumentiert (`FEATURE_FREEZE.md`) | Klarer Scope, kein Ressourcen-Verlust | 08.03.2026 |
+| 0.3 | ✅ | Branch `trustwave-core` erstellt und gepusht | `git push origin trustwave-core` ✓ | 08.03.2026 |
+| 0.4 | ✅ | NDA-Template erstellt (`docs/NDA_TEMPLATE.md`) | Deutsche NDA nach GeschGehG, 5 Jahre Laufzeit | 08.03.2026 |
+| 0.4 | ⏳ | NDA-Template vom Anwalt prüfen lassen | Anwaltlich geprüfte Fassung | — Ausstehend (menschliche Aktion) |
 
-**Meilenstein 0:** Geistiges Eigentum ist datiert. Alle weiteren Gespräche laufen unter NDA.
+**Meilenstein 0:** ⏳ Technisch erledigt. Ausstehend: Notartermin + Anwaltsprüfung NDA.
+
+> **Nächste menschliche Aktionen:**
+> 1. `docs/KONZEPTDOKUMENT.md` ausdrucken → Notartermin vereinbaren
+> 2. `docs/NDA_TEMPLATE.md` an IP-Anwalt schicken zur Prüfung
+> 3. Firmenstruktur mit Steuerberater klären
 
 ---
 
@@ -507,15 +515,18 @@ trustwave/                          (umbenannt von log-gateway/)
 │   └── metrics.rs                  ← existiert ✅   (Prometheus)
 │
 ├── docs/
-│   ├── poc_results.md              ← Phase 3.3.4  (Backtesting-Ergebnisse)
-│   └── architecture.md
+│   ├── KONZEPTDOKUMENT.md          ← existiert ✅  Phase 0.1  (für Notar, 08.03.2026)
+│   ├── NDA_TEMPLATE.md             ← existiert ✅  Phase 0.4  (Anwaltsprüfung ausstehend)
+│   ├── poc_results.md              ← NEU Phase 3.3.4  (Backtesting-Ergebnisse)
+│   └── architecture.md             ← NEU Phase 5
 │
 ├── scripts/
-│   ├── download_mrt.sh             ← Phase 1.4.3
-│   └── download_hijack_data.sh     ← Phase 3.2.2
+│   ├── download_mrt.sh             ← NEU Phase 1.4.3
+│   └── download_hijack_data.sh     ← NEU Phase 3.2.2
 │
-├── TRUSTWAVE_ROADMAP.md            ← dieses Dokument
-└── PRODUCT_ROADMAP.md              ← PrefixGuard Legacy (Phase-Referenz)
+├── FEATURE_FREEZE.md               ← existiert ✅  Phase 0.2  (08.03.2026)
+├── TRUSTWAVE_ROADMAP.md            ← existiert ✅  dieses Dokument
+└── PRODUCT_ROADMAP.md              ← existiert ✅  PrefixGuard Legacy (Phase-Referenz)
 ```
 
 ---
