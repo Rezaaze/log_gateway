@@ -1,0 +1,12 @@
+[package]
+name = "baseline-builder"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "baseline-builder"
+path = "src/main.rs"
+
+[dependencies]
+indicatif  = "0.17"      # Fortschrittsbalken
+rayon      = "1"         # paralleles Parsen mehrerer Kollektor-Dateien

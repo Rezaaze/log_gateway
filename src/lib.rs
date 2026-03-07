@@ -52,6 +52,7 @@ pub mod sink;
 pub mod telemetry;
 pub mod tenant_api;
 pub mod tenant_manager;
+pub mod wave_baseline;
 pub mod webhook;
 
 pub use anomaly_detector::AnomalyDetector;
