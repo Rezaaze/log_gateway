@@ -39,6 +39,7 @@ pub mod middleware;
 pub mod model_trainer;
 pub mod models;
 pub mod nats_subscriber;
+pub mod propagation;
 pub mod quota_manager;
 pub mod rate_limiter;
 pub mod redactor;

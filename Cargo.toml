@@ -51,7 +51,7 @@ utoipa-swagger-ui = { version = "7", features = ["axum"] }
 crossbeam = { version = "0.8", features = ["crossbeam-queue"] }
 console-subscriber = { version = "0.4", optional = true }
 reqwest = { version = "0.12", features = ["json"], default-features = false }
-ipnet = "2"
+ipnet = { version = "2", features = ["serde"] }
 opentelemetry = { version = "0.27", features = ["trace"] }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["tonic", "trace"] }

@@ -145,12 +145,12 @@ Kollektoren innerhalb eines Zeitfensters zu einem `PropagationEvent`.
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 1.3.1 | `PropagationEvent` Datenstruktur | `src/propagation.rs` | Prefix + AS-Path + `BTreeMap<collector, timestamp>` |
-| 1.3.2 | `PropagationAggregator` mit 10s Zeitfenster | `src/propagation.rs` | `DashMap<GroupKey, PropagationEvent>`, Cleanup-Task |
-| 1.3.3 | Group-Key definieren | `src/propagation.rs` | `(prefix_normalized, origin_as, as_path_hash)` |
-| 1.3.4 | NATS-Consumer: liest `bgp-events`, schreibt `bgp-propagation` | `src/propagation.rs` | Neues NATS-Subject für aggregierte Events |
-| 1.3.5 | Mindest-Schwelle: ≥ 3 Kollektoren pro Event | `src/propagation.rs` | Unter 3 Kollektoren: kein auswertbares Propagations-Event |
-| 1.3.6 | Unit-Tests: Aggregation, Timeout, Key-Kollision | `tests/propagation_test.rs` | Edge-Cases abdecken |
+| ✅ 1.3.1 | `PropagationEvent` Datenstruktur | `src/propagation.rs` | `IpNet` + `BTreeMap<String, f64>` + abgeleitete Felder (first/last/spread_ms/arrival_order); `serde::Serialize+Deserialize`; `ipnet` serde-feature |
+| ✅ 1.3.2 | `PropagationAggregator` mit 10s Zeitfenster | `src/propagation.rs` | `DashMap<GroupKey, PendingGroup>`; `add()` + `flush_expired()`; `impl Default` |
+| ✅ 1.3.3 | Group-Key definieren | `src/propagation.rs` | `GroupKey { prefix, origin_as, path_hash }`; Polynomial-Hash `wrapping_mul(31)` |
+| ✅ 1.3.4 | NATS-Consumer: liest `bgp.events`, schreibt `bgp.propagation` | `src/propagation.rs` | `run(self: Arc<Self>, nats_url)` async; Flush-Task jede 1s |
+| ✅ 1.3.5 | Mindest-Schwelle: ≥ 3 Kollektoren pro Event | `src/propagation.rs` | Guard in Haupt-Loop + Flush-Task |
+| ✅ 1.3.6 | Unit-Tests: Aggregation, Group-Key, Arrival-Order | `src/propagation.rs` | 8 Tests total: spread/order/single/threshold/group-key×2/aggregator×2 |
 
 ```rust
 pub struct PropagationEvent {
