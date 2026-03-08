@@ -866,8 +866,16 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 name = "baseline-builder"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "bgpkit-parser",
+ "clap",
  "indicatif",
+ "log-gateway",
  "rayon",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]
@@ -2880,6 +2888,7 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
+ "walkdir",
  "zstd",
 ]
 

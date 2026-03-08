@@ -67,6 +67,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 glob = "0.3"
 bincode  = "1"           # binäre Serialisierung der Baseline
 memmap2  = "0.9"         # memory-mapped file loading für große Baselines
+walkdir  = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

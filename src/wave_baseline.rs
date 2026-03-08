@@ -1,7 +1,34 @@
+use crate::propagation::PropagationEvent;
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::time::SystemTime;
+
+/// Gibt true wenn das Event für die Baseline geeignet ist.
+///
+/// Qualitätskriterien:
+/// 1. Mindestens 3 Kollektoren haben die Ankündigung gesehen
+///    (3 Punkte nötig für Triangulation)
+/// 2. AS-Pfad-Länge ≤ 6 Hops
+///    (längere Pfade sind oft instabile oder seltene Routen)
+/// 3. Kein leerer AS-Pfad (= kein Origin-AS bestimmbar)
+/// 4. Spread ≤ 10.000ms (10 Sekunden)
+///    (größerer Spread = wahrscheinlich verschiedene Ereignisse, kein einzelner Announce)
+pub fn is_good_route(event: &PropagationEvent) -> bool {
+    if event.arrivals.len() < 3 {
+        return false;
+    }
+    if event.as_path.is_empty() {
+        return false;
+    }
+    if event.as_path.len() > 6 {
+        return false;
+    }
+    if event.spread_ms > 10_000.0 {
+        return false;
+    }
+    true
+}
 
 /// Schlüssel für die Baseline-HashMap: (Präfix, Ursprungs-AS).
 /// Der AS-Pfad-Hash ist NICHT im Schlüssel — gleiche Route via
@@ -253,6 +280,87 @@ impl PropagationBaseline {
 /// Wird als einzelne Datei (bincode + zstd) gespeichert.
 pub type BaselineStore = HashMap<BaselineKey, PropagationBaseline>;
 
+/// Baut die PropagationBaseline aus historischen PropagationEvents auf.
+///
+/// Verwendung:
+///   1. `BaselineBuilder::new()` erstellen
+///   2. `add_event(&prop_event)` für jedes gefilterte Event aufrufen
+///   3. `build()` aufrufen → gibt `BaselineStore` zurück
+pub struct BaselineBuilder {
+    /// Akkumulatoren pro (Präfix, Origin-AS)
+    accumulators: HashMap<BaselineKey, BaselineAccumulator>,
+}
+
+impl BaselineBuilder {
+    pub fn new() -> Self {
+        Self {
+            accumulators: HashMap::new(),
+        }
+    }
+
+    /// Fügt ein PropagationEvent in die Baseline ein.
+    /// Das Event MUSS vorher durch den Qualitäts-Filter geprüft sein.
+    pub fn add_event(&mut self, event: &PropagationEvent) {
+        let key = BaselineKey::new(&event.prefix, event.origin_as);
+        self.accumulators
+            .entry(key)
+            .or_default()
+            .add_event(&event.arrivals);
+    }
+
+    /// Liefert die Anzahl bisher verarbeiteter eindeutiger (Präfix, Origin-AS) Paare.
+    pub fn entry_count(&self) -> usize {
+        self.accumulators.len()
+    }
+
+    /// Finalisiert die Baseline: konvertiert alle Akkumulatoren in `PropagationBaseline`.
+    /// Gibt nur Einträge zurück die `is_reliable()` erfüllen (sample_count >= 30).
+    pub fn build(self) -> BaselineStore {
+        self.accumulators
+            .into_iter()
+            .map(|(key, acc)| {
+                let baseline = acc.to_baseline(&key.prefix, key.origin_as);
+                (key, baseline)
+            })
+            .filter(|(_, b)| b.is_reliable())
+            .collect()
+    }
+
+    /// Wie `build()` aber gibt ALLE Einträge zurück (auch unreliable).
+    /// Nützlich zum Debuggen und für Statistiken.
+    pub fn build_all(self) -> BaselineStore {
+        self.accumulators
+            .into_iter()
+            .map(|(key, acc)| {
+                let baseline = acc.to_baseline(&key.prefix, key.origin_as);
+                (key, baseline)
+            })
+            .collect()
+    }
+}
+
+/// Speichert eine Baseline-Datenbank als bincode + zstd komprimierte Datei.
+/// Wird in Prompt 2.3.1 vollständig implementiert.
+pub fn save_baseline(store: &BaselineStore, path: &std::path::Path) -> anyhow::Result<()> {
+    use std::fs::File;
+    use std::io::Write;
+
+    // Placeholder-Implementierung für jetzt
+    // In Prompt 2.3.1 wird dies durch bincode + zstd ersetzt
+    let encoded = bincode::serialize(store)?;
+    let compressed = zstd::encode_all(&encoded[..], 3)?;
+
+    let mut file = File::create(path)?;
+    file.write_all(&compressed)?;
+    Ok(())
+}
+
+impl Default for BaselineBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +563,152 @@ mod tests {
         assert!(c30 < c100 && c100 < c1000);
         assert!(c30 >= 0.5, "30 Samples sollten ≥ 0.5 Konfidenz haben");
         assert!(c1000 > 0.99, "1000 Samples sollten ≈ 1.0 sein");
+    }
+
+    fn make_event(prefix: &str, origin_as: u32, arrivals: &[(&str, f64)]) -> PropagationEvent {
+        use std::collections::BTreeMap;
+        let arrivals_map: BTreeMap<String, f64> =
+            arrivals.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let first = arrivals_map.values().copied().fold(f64::INFINITY, f64::min);
+        let last = arrivals_map
+            .values()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let mut order: Vec<String> = arrivals_map.keys().cloned().collect();
+        order.sort_by(|a, b| arrivals_map[a].partial_cmp(&arrivals_map[b]).unwrap());
+        PropagationEvent {
+            prefix: prefix.parse().unwrap(),
+            origin_as,
+            as_path: vec![1103, origin_as],
+            arrivals: arrivals_map,
+            first_arrival: first,
+            last_arrival: last,
+            spread_ms: (last - first) * 1000.0,
+            arrival_order: order,
+        }
+    }
+
+    #[test]
+    fn test_builder_accumulates_events() {
+        let mut builder = BaselineBuilder::new();
+        let event = make_event(
+            "8.8.8.0/24",
+            15169,
+            &[("rrc12", 1000.0), ("rrc00", 1000.089), ("rrc11", 1000.891)],
+        );
+        builder.add_event(&event);
+        assert_eq!(builder.entry_count(), 1);
+    }
+
+    #[test]
+    fn test_builder_different_prefix_different_entry() {
+        let mut builder = BaselineBuilder::new();
+        builder.add_event(&make_event(
+            "8.8.8.0/24",
+            15169,
+            &[("rrc12", 1000.0), ("rrc00", 1000.1), ("rrc11", 1000.5)],
+        ));
+        builder.add_event(&make_event(
+            "1.1.1.0/24",
+            13335,
+            &[("rrc12", 1000.0), ("rrc00", 1000.1), ("rrc11", 1000.5)],
+        ));
+        assert_eq!(builder.entry_count(), 2);
+    }
+
+    #[test]
+    fn test_builder_build_filters_unreliable() {
+        let mut builder = BaselineBuilder::new();
+        // Nur 5 Events → sample_count = 5 < 30 → unreliable → nicht in build()
+        for i in 0..5 {
+            builder.add_event(&make_event(
+                "8.8.8.0/24",
+                15169,
+                &[
+                    ("rrc12", 1000.0 + i as f64 * 100.0),
+                    ("rrc00", 1000.1 + i as f64 * 100.0),
+                    ("rrc11", 1000.5 + i as f64 * 100.0),
+                ],
+            ));
+        }
+        let store = builder.build();
+        assert!(
+            store.is_empty(),
+            "Weniger als 30 Samples → sollte gefiltert werden"
+        );
+    }
+
+    #[test]
+    fn test_builder_build_all_includes_unreliable() {
+        let mut builder = BaselineBuilder::new();
+        builder.add_event(&make_event(
+            "8.8.8.0/24",
+            15169,
+            &[("rrc12", 1000.0), ("rrc00", 1000.1), ("rrc11", 1000.5)],
+        ));
+        let store = builder.build_all();
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_good_route_passes_filter() {
+        let event = make_event(
+            "8.8.8.0/24",
+            15169,
+            &[("rrc12", 1000.0), ("rrc00", 1000.089), ("rrc11", 1000.891)],
+        );
+        assert!(is_good_route(&event));
+    }
+
+    #[test]
+    fn test_too_few_collectors_rejected() {
+        let event = make_event(
+            "8.8.8.0/24",
+            15169,
+            &[("rrc12", 1000.0), ("rrc00", 1000.089)],
+        ); // nur 2
+        assert!(!is_good_route(&event));
+    }
+
+    #[test]
+    fn test_too_long_as_path_rejected() {
+        use std::collections::BTreeMap;
+        let arrivals: BTreeMap<String, f64> =
+            [("rrc12", 1000.0), ("rrc00", 1000.1), ("rrc11", 1000.5)]
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect();
+        let event = PropagationEvent {
+            prefix: "8.8.8.0/24".parse().unwrap(),
+            origin_as: 15169,
+            as_path: vec![1, 2, 3, 4, 5, 6, 7], // 7 Hops → zu lang
+            arrivals: arrivals.clone(),
+            first_arrival: 1000.0,
+            last_arrival: 1000.5,
+            spread_ms: 500.0,
+            arrival_order: vec!["rrc12".into(), "rrc00".into(), "rrc11".into()],
+        };
+        assert!(!is_good_route(&event));
+    }
+
+    #[test]
+    fn test_large_spread_rejected() {
+        use std::collections::BTreeMap;
+        let arrivals: BTreeMap<String, f64> =
+            [("rrc12", 1000.0), ("rrc00", 1005.0), ("rrc11", 1011.0)]
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect();
+        let event = PropagationEvent {
+            prefix: "1.0.0.0/24".parse().unwrap(),
+            origin_as: 1,
+            as_path: vec![1],
+            arrivals: arrivals.clone(),
+            first_arrival: 1000.0,
+            last_arrival: 1011.0,
+            spread_ms: 11_000.0, // > 10s → abgelehnt
+            arrival_order: vec!["rrc12".into(), "rrc00".into(), "rrc11".into()],
+        };
+        assert!(!is_good_route(&event));
     }
 }
