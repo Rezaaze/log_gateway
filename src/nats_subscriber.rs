@@ -36,6 +36,8 @@ pub struct BgpRecord {
     pub event_type: String, // "announce" or "withdraw"
     pub as_path: Vec<u32>,
     pub timestamp: DateTime<Utc>,
+    pub collector: String, // e.g., "rrc12", fallback: "unknown"
+    pub peer_ip: String,   // e.g., "80.249.211.0", fallback: ""
 }
 
 /// Configuration for NATS subscriber
@@ -62,6 +64,8 @@ impl Default for SubscriberConfig {
 /// - peer_asn: u32 peer ASN
 /// - event_type: "announce" or "withdraw"
 /// - as_path: array of u32 ASNs
+/// - collector: collector name (e.g., "rrc12"), fallback: "unknown"
+/// - peer_ip: peer IP address, fallback: ""
 pub fn extract_bgp_record(event: &BgpEvent) -> Option<BgpRecord> {
     let metadata = event.metadata.as_ref()?;
 
@@ -80,6 +84,17 @@ pub fn extract_bgp_record(event: &BgpEvent) -> Option<BgpRecord> {
         })
         .unwrap_or_default();
 
+    let collector = metadata
+        .get("collector")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let peer_ip = metadata
+        .get("peer_ip")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
     Some(BgpRecord {
         prefix,
         origin_as,
@@ -87,6 +102,8 @@ pub fn extract_bgp_record(event: &BgpEvent) -> Option<BgpRecord> {
         event_type,
         as_path,
         timestamp: event.timestamp,
+        collector,
+        peer_ip,
     })
 }
 
@@ -366,5 +383,77 @@ mod tests {
         };
 
         assert!(extract_bgp_record(&event).is_none());
+    }
+
+    #[test]
+    fn test_extract_collector_and_peer_ip() {
+        let event = BgpEvent {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            level: "info".to_string(),
+            source: "ripe-ris".to_string(),
+            message: "ANNOUNCE 8.8.8.0/24".to_string(),
+            metadata: Some(serde_json::json!({
+                "event_type": "announce",
+                "prefix":     "8.8.8.0/24",
+                "peer_asn":   1103_u64,
+                "origin_as":  15169_u64,
+                "peer_ip":    "80.249.211.0",
+                "as_path":    [1103_u64, 3356_u64, 15169_u64],
+                "collector":  "rrc12",
+            })),
+        };
+        let record = extract_bgp_record(&event).unwrap();
+        assert_eq!(record.collector, "rrc12");
+        assert_eq!(record.peer_ip, "80.249.211.0");
+        assert_eq!(record.origin_as, 15169);
+    }
+
+    #[test]
+    fn test_extract_collector_fallback_to_unknown() {
+        let event = BgpEvent {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            level: "info".to_string(),
+            source: "ripe-ris".to_string(),
+            message: "ANNOUNCE 1.0.0.0/24".to_string(),
+            metadata: Some(serde_json::json!({
+                "event_type": "announce",
+                "prefix":     "1.0.0.0/24",
+                "peer_asn":   64512_u64,
+                "origin_as":  64512_u64,
+                "peer_ip":    "",
+                "as_path":    [64512_u64],
+                // kein "collector"-Feld
+            })),
+        };
+        let record = extract_bgp_record(&event).unwrap();
+        assert_eq!(record.collector, "unknown");
+        assert_eq!(record.peer_ip, "");
+    }
+
+    #[test]
+    fn test_extract_different_collectors() {
+        let make_event = |collector: &str, prefix: &str| BgpEvent {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            level: "info".to_string(),
+            source: "ripe-ris".to_string(),
+            message: format!("ANNOUNCE {prefix}"),
+            metadata: Some(serde_json::json!({
+                "event_type": "announce",
+                "prefix":     prefix,
+                "peer_asn":   1103_u64,
+                "origin_as":  15169_u64,
+                "peer_ip":    "10.0.0.1",
+                "as_path":    [1103_u64, 15169_u64],
+                "collector":  collector,
+            })),
+        };
+        let r1 = extract_bgp_record(&make_event("rrc00", "8.8.8.0/24")).unwrap();
+        let r2 = extract_bgp_record(&make_event("rrc17", "8.8.8.0/24")).unwrap();
+        assert_eq!(r1.collector, "rrc00");
+        assert_eq!(r2.collector, "rrc17");
+        assert_ne!(r1.collector, r2.collector);
     }
 }

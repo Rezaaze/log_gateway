@@ -52,12 +52,19 @@ x-gateway-volumes: &gateway-volumes
   - ./certs:/app/certs:ro            # TLS-Zertifikate (read-only)
   - ./config:/app/config:ro          # Gateway-Config (read-only)
 
+# ── Log-Rotation (YAML-Anker) — verhindert unkontrolliertes Wachstum ─────────
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "100m"
+    max-file: "3"
+
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
 
   # ── Gateway Instanz 1 — vCPU 0 ─────────────────────────────────────────────
   gateway_1:
-    image: log-gateway:latest
+    image: ghcr.io/rezaaze/log_gateway:latest
     container_name: gateway_1
     cpuset: "0"
     environment:
@@ -77,11 +84,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+    logging: *default-logging
     restart: unless-stopped
 
   # ── Gateway Instanz 2 — vCPU 1 ─────────────────────────────────────────────
   gateway_2:
-    image: log-gateway:latest
+    image: ghcr.io/rezaaze/log_gateway:latest
     container_name: gateway_2
     cpuset: "1"
     environment:
@@ -101,11 +109,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+    logging: *default-logging
     restart: unless-stopped
 
   # ── Gateway Instanz 3 — vCPU 2 ─────────────────────────────────────────────
   gateway_3:
-    image: log-gateway:latest
+    image: ghcr.io/rezaaze/log_gateway:latest
     container_name: gateway_3
     cpuset: "2"
     environment:
@@ -125,11 +134,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+    logging: *default-logging
     restart: unless-stopped
 
   # ── Gateway Instanz 4 — vCPU 3 ─────────────────────────────────────────────
   gateway_4:
-    image: log-gateway:latest
+    image: ghcr.io/rezaaze/log_gateway:latest
     container_name: gateway_4
     cpuset: "3"
     environment:
@@ -149,6 +159,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+    logging: *default-logging
     restart: unless-stopped
 
   # ── HAProxy Load Balancer ────────────────────────────────────────────────────
@@ -173,6 +184,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging: *default-logging
     restart: unless-stopped
 
   # ── MinIO ───────────────────────────────────────────────────────────────────
@@ -190,6 +202,7 @@ services:
       - minio-data:/data
     networks:
       - gateway-net
+    logging: *default-logging
     restart: unless-stopped
 
   # ── Prometheus ──────────────────────────────────────────────────────────────
@@ -208,6 +221,7 @@ services:
       - "--storage.tsdb.retention.time=15d"
     networks:
       - gateway-net
+    logging: *default-logging
     restart: unless-stopped
 
   # ── Grafana ─────────────────────────────────────────────────────────────────
@@ -229,6 +243,7 @@ services:
       - gateway-net
     depends_on:
       - prometheus
+    logging: *default-logging
     restart: unless-stopped
 
   # ── NATS Jetstream ──────────────────────────────────────────────────────────────
@@ -252,6 +267,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+    logging: *default-logging
     restart: unless-stopped
 
   # ── BGP Stream (Rust) — RIPE NCC RIS Live → NATS ──────────────────────────────
@@ -282,6 +298,7 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
   # ── ClickHouse ──────────────────────────────────────────────────────────────
@@ -308,6 +325,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *default-logging
     restart: unless-stopped
     mem_limit: 2g
     ulimits:
@@ -325,6 +343,7 @@ services:
       - routinator-data:/home/routinator/.rpki-cache
     networks:
       - gateway-net
+    logging: *default-logging
     restart: unless-stopped
     mem_limit: 1.5g   # 825k VRPs benötigen ~1-1.5GB — 512m reicht nicht (Validation hängt bei 98%)
     healthcheck:
@@ -350,6 +369,7 @@ services:
       - "--web.external-url=http://localhost:9093"
     networks:
       - gateway-net
+    logging: *default-logging
     restart: unless-stopped
 
 # ── Volumes ───────────────────────────────────────────────────────────────────

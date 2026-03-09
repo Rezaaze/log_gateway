@@ -199,6 +199,8 @@ jobs:
                       /root/log-gateway/deploy/grafana/provisioning/dashboards \
                       /root/log-gateway/deploy/grafana/provisioning/datasources \
                       /root/log-gateway/deploy/clickhouse \
+                      /root/log-gateway/deploy/nats \
+                      /root/log-gateway/secrets \
                       /root/log-gateway/tools \
                       /root/log-gateway/data/logs \
                       /root/log-gateway/certs \
@@ -246,11 +248,18 @@ jobs:
             config/default.toml \
             root@167.235.30.106:/root/log-gateway/config/default.toml
 
-          # ClickHouse init.sql
+          # ClickHouse schemas
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             deploy/clickhouse/init.sql \
             root@167.235.30.106:/root/log-gateway/deploy/clickhouse/init.sql
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/clickhouse/alert_rules_schema.sql \
+            root@167.235.30.106:/root/log-gateway/deploy/clickhouse/alert_rules_schema.sql
 
+          # NATS config
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            deploy/nats/nats.conf \
+            root@167.235.30.106:/root/log-gateway/deploy/nats/nats.conf
 
       - name: Deploy cluster via SSH
         run: |
@@ -260,14 +269,33 @@ jobs:
               bash << 'ENDSSH'
             set -e
 
+            # ── Disk-Space-Check (min. 5 GB frei) ────────────────────────────
+            AVAIL_KB=$(df /root --output=avail | tail -1 | tr -d ' ')
+            AVAIL_GB=$(( AVAIL_KB / 1024 / 1024 ))
+            echo "Verfügbarer Speicher: ${AVAIL_GB} GB (${AVAIL_KB} KB)"
+            if [ "$AVAIL_KB" -lt 5242880 ]; then
+              echo "ERROR: Weniger als 5 GB frei (${AVAIL_GB} GB). Bitte Disk aufräumen."
+              df -h /root
+              exit 1
+            fi
+
+            # ── Secrets-Check ─────────────────────────────────────────────────
+            SECRETS_DIR="/root/log-gateway/secrets"
+            if [ ! -f "${SECRETS_DIR}/gateway_api_key.txt" ] || \
+               [ ! -f "${SECRETS_DIR}/gateway_jwt_secret.txt" ]; then
+              echo "ERROR: Secrets fehlen in ${SECRETS_DIR}/"
+              echo "Bitte auf dem Server anlegen:"
+              echo "  echo 'DEIN_API_KEY'   > ${SECRETS_DIR}/gateway_api_key.txt"
+              echo "  echo 'DEIN_JWT_SECRET' > ${SECRETS_DIR}/gateway_jwt_secret.txt"
+              echo "  chmod 600 ${SECRETS_DIR}/*.txt"
+              exit 1
+            fi
+            echo "Secrets vorhanden — OK"
+
             # GHCR login und neue Images pullen (GITHUB_TOKEN hat packages:read)
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
             docker pull ghcr.io/rezaaze/log_gateway:latest
             docker pull ghcr.io/rezaaze/log_gateway/bgp-stream:latest
-
-            # Altes Image taggen (Rollback-Möglichkeit)
-            docker tag ghcr.io/rezaaze/log_gateway:latest log-gateway:previous 2>/dev/null || true
-            docker tag ghcr.io/rezaaze/log_gateway:latest log-gateway:latest
 
             # Cluster neu starten (nur geänderte Container werden neu gestartet)
             cd /root/log-gateway

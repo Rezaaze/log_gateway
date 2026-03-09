@@ -161,10 +161,12 @@ struct RisMessage {
 #[derive(Deserialize, Debug)]
 struct RisData {
     timestamp: Option<f64>,
+    id: Option<String>,       // collector name, e.g. "rrc12"
     peer_asn: Option<Value>,  // can be string or number
     path: Option<Vec<Value>>, // can be nested (AS-sets)
     announcements: Option<Vec<Announcement>>,
     withdrawals: Option<Vec<String>>,
+    peer: Option<String>, // Peer-IP-Adresse, z.B. "80.249.211.0"
 }
 
 #[derive(Deserialize, Debug)]
@@ -200,6 +202,7 @@ fn process_ris_data(
     tx: &Sender<BgpEvent>,
     stats: &Arc<Stats>,
     sample_rate: f64,
+    collector: &str,
 ) {
     let ts = data.timestamp.unwrap_or_else(|| {
         std::time::SystemTime::now()
@@ -273,6 +276,7 @@ fn process_ris_data(
                         "peer_ip":    nh,
                         "as_path":    path_vec.iter().map(|&a| a as u32).collect::<Vec<u32>>(),
                         "community":  Vec::<String>::new(),
+                        "collector":  collector,
                     })),
                 };
 
@@ -307,9 +311,10 @@ fn process_ris_data(
                     "prefix":     pfx,
                     "peer_asn":   peer_asn_raw,
                     "origin_as":  origin as u32,
-                    "peer_ip":    "",
+                    "peer_ip":    data.peer.as_deref().unwrap_or(""),
                     "as_path":    path_vec.iter().map(|&a| a as u32).collect::<Vec<u32>>(),
                     "community":  Vec::<String>::new(),
+                    "collector":  collector,
                 })),
             };
 
@@ -462,7 +467,15 @@ async fn bgp_stream_task(
                     match serde_json::from_str::<RisMessage>(&text) {
                         Ok(ris_msg) if ris_msg.msg_type == "ris_message" => {
                             if let Some(data) = &ris_msg.data {
-                                process_ris_data(data, &known, &tx, &stats, cfg.sample_rate);
+                                let collector = data.id.as_deref().unwrap_or("unknown");
+                                process_ris_data(
+                                    data,
+                                    &known,
+                                    &tx,
+                                    &stats,
+                                    cfg.sample_rate,
+                                    collector,
+                                );
                             }
                         }
                         Ok(_) => {}  // ris_subscribe_ok or other control messages

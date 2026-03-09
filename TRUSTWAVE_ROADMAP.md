@@ -1,6 +1,7 @@
 # BGP TrustWave — Technische Implementierungs-Roadmap
 
 **Stand:** 08.03.2026
+**Letztes Update:** 08.03.2026
 **Vertraulich** — Alle Gespräche nur unter NDA
 **Prinzip:** Jede Phase liefert einen messbaren Beweis. Kein nächster Schritt ohne erfolgreichen Meilenstein.
 
@@ -8,16 +9,16 @@
 
 ## Übersicht
 
-| Phase | Titel | Zeitraum | Ziel |
-|---|---|---|---|
-| 0 | IP-Schutz & Projekt-Reset | Woche 1 | Rechtlich absichern, Fokus setzen |
-| 1 | Daten-Fundament | Woche 2–4 | Rohdaten korrekt erfassen |
-| 2 | Wellenbaseline | Woche 4–8 | Normales Propagationsverhalten modellieren |
-| 3 | Wave Anomaly Detector | Woche 8–12 | Hijacks durch Wellenabweichung erkennen |
-| 4 | Trust Score Engine | Woche 12–16 | Alle Signale zu einem Score kombinieren |
-| 5 | Echtzeit-System | Monat 4–6 | Live-Betrieb, Validierung |
-| 6 | BGP-Speaker & Pilot | Monat 6–9 | Aktives Routing, erster Kunde |
-| 7 | Produktreife | Monat 9–18 | Skalierung, Zertifizierungen |
+| Phase | Titel | Zeitraum | Ziel | Status |
+|---|---|---|---|---|
+| 0 | IP-Schutz & Projekt-Reset | Woche 1 | Rechtlich absichern, Fokus setzen | ⏳ Teilweise erledigt |
+| 1 | Daten-Fundament | Woche 2–4 | Rohdaten korrekt erfassen | 🔲 Offen |
+| 2 | Wellenbaseline | Woche 4–8 | Normales Propagationsverhalten modellieren | 🔲 Offen |
+| 3 | Wave Anomaly Detector | Woche 8–12 | Hijacks durch Wellenabweichung erkennen | 🔲 Offen |
+| 4 | Trust Score Engine | Woche 12–16 | Alle Signale zu einem Score kombinieren | 🔲 Offen |
+| 5 | Echtzeit-System | Monat 4–6 | Live-Betrieb, Validierung | 🔲 Offen |
+| 6 | BGP-Speaker & Pilot | Monat 6–9 | Aktives Routing, erster Kunde | 🔲 Offen |
+| 7 | Produktreife | Monat 9–18 | Skalierung, Zertifizierungen | 🔲 Offen |
 
 ### Technische Kernidee
 
@@ -60,20 +61,27 @@ HIJACK:
 ---
 
 ## Phase 0 — IP-Schutz & Projekt-Reset
-**Woche 1 | Vor allem anderen**
+**Woche 1 | ⏳ Teilweise erledigt — 08.03.2026**
 
 > Bevor eine Zeile Code geschrieben wird: Die Kombination aus Wellenphysik,
 > Kollektor-Triangulation und Trust-Score-Degradierung für BGP existiert so
 > nirgendwo. Dieser Vorsprung muss datiert und geschützt sein.
 
-| # | Task | Output |
-|---|---|---|
-| 0.1 | Konzeptdokument (Wellenphysik + Kollektor-Triangulation) notariell datieren | Datiertes Dokument mit Urheberschaft |
-| 0.2 | Feature-Freeze auf log-gateway: kein neues Feature mehr am alten System | Klarer Scope, kein Ressourcen-Verlust |
-| 0.3 | Neuer Branch `trustwave-core` — TrustWave-Entwicklung getrennt | Git-Branch, saubere History |
-| 0.4 | NDA-Template erstellen für alle Expertengespräche | NDA-Dokument, Anwalt geprüft |
+| # | Status | Task | Output | Erledigt am |
+|---|---|---|---|---|
+| 0.1 | ✅ | Konzeptdokument erstellt (`docs/KONZEPTDOKUMENT.md`) | Druckfertig für Notar, 08.03.2026 datiert | 08.03.2026 |
+| 0.1 | ⏳ | Konzeptdokument notariell beglaubigen lassen | Notariell datiertes Original | — Ausstehend (menschliche Aktion) |
+| 0.2 | ✅ | Feature-Freeze dokumentiert (`FEATURE_FREEZE.md`) | Klarer Scope, kein Ressourcen-Verlust | 08.03.2026 |
+| 0.3 | ✅ | Branch `trustwave-core` erstellt und gepusht | `git push origin trustwave-core` ✓ | 08.03.2026 |
+| 0.4 | ✅ | NDA-Template erstellt (`docs/NDA_TEMPLATE.md`) | Deutsche NDA nach GeschGehG, 5 Jahre Laufzeit | 08.03.2026 |
+| 0.4 | ⏳ | NDA-Template vom Anwalt prüfen lassen | Anwaltlich geprüfte Fassung | — Ausstehend (menschliche Aktion) |
 
-**Meilenstein 0:** Geistiges Eigentum ist datiert. Alle weiteren Gespräche laufen unter NDA.
+**Meilenstein 0:** ⏳ Technisch erledigt. Ausstehend: Notartermin + Anwaltsprüfung NDA.
+
+> **Nächste menschliche Aktionen:**
+> 1. `docs/KONZEPTDOKUMENT.md` ausdrucken → Notartermin vereinbaren
+> 2. `docs/NDA_TEMPLATE.md` an IP-Anwalt schicken zur Prüfung
+> 3. Firmenstruktur mit Steuerberater klären
 
 ---
 
@@ -87,10 +95,10 @@ im JSON-Feld `id`. Es wird aktuell verworfen — das ist der erste Fix.
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 1.1.1 | `collector`-Feld zu `BgpRecord` hinzufügen | `tools/bgp_stream/src/main.rs` | `pub collector: String` — aus `msg["id"]` extrahieren |
-| 1.1.2 | `peer_asn` und `peer_ip` in `BgpRecord` aufnehmen | `tools/bgp_stream/src/main.rs` | Für spätere Peer-Analyse |
-| 1.1.3 | NATS-Payload Schema aktualisieren | `src/models.rs` | `BgpRecord` struct erweitern, alle Konsumenten anpassen |
-| 1.1.4 | Smoke-Test: Collector-Verteilung live loggen | Integration-Test | 5 min laufen lassen, prüfen ob rrc00–rrc26 auftauchen |
+| ✅ 1.1.1 | `collector`-Feld zu `BgpRecord` hinzufügen | `tools/bgp_stream/src/main.rs` | `id: Option<String>` in `RisData`; `collector: &str` Parameter in `process_ris_data()`; `"collector": collector` in announce + withdraw JSON; `data.id.as_deref().unwrap_or("unknown")` |
+| ✅ 1.1.2 | `peer_ip` in `BgpRecord` aufnehmen (WITHDRAW) | `tools/bgp_stream/src/main.rs` | `peer: Option<String>` in `RisData`; WITHDRAW: `"peer_ip": data.peer.as_deref().unwrap_or("")` |
+| ✅ 1.1.3 | NATS-Payload Schema aktualisieren | `src/nats_subscriber.rs` | `pub collector: String` + `pub peer_ip: String` in `BgpRecord`; `extract_bgp_record` extrahiert beide Felder; alle Konsumenten (detector_runner, detector_loop, Tests) angepasst |
+| ✅ 1.1.4 | Unit-Tests für Collector-Extraktion | `src/nats_subscriber.rs` | 3 Tests: korrekte Extraktion, Fallback "unknown", Collector-Unterscheidung (rrc00 vs rrc17) |
 
 ```rust
 // Ziel-Struktur nach Abschnitt 1.1:
@@ -112,10 +120,10 @@ pub struct BgpRecord {
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 1.2.1 | Statische Kollektor-Tabelle (26 RRCs) anlegen | `src/collector_registry.rs` | ID, Name, Lat/Lon, IXP, Region (EU/NA/APAC/SA/AF) |
-| 1.2.2 | `CollectorInfo::lookup(id)` Funktion | `src/collector_registry.rs` | O(1) HashMap-Lookup |
-| 1.2.3 | Geografische Distanz zwischen zwei Kollektoren | `src/collector_registry.rs` | Haversine-Formel, gibt km zurück |
-| 1.2.4 | Erwartete Lichtlaufzeit zwischen zwei Kollektoren | `src/collector_registry.rs` | `distance_km / 200_000 * 1000` ms (Glasfaser ≈ 2/3 c) |
+| ✅ 1.2.1 | Statische Kollektor-Tabelle (24 RRCs) anlegen | `src/collector_registry.rs` | `Region` enum + `CollectorInfo` struct; `pub static COLLECTORS: &[CollectorInfo]`; alle rrc00–rrc26; `pub mod collector_registry` in lib.rs |
+| ✅ 1.2.2 | `lookup(id)` Funktion | `src/collector_registry.rs` | `OnceLock<HashMap<...>>` für O(1)-Lookup; 3 Tests (known/unknown/all-26) |
+| ✅ 1.2.3 | Geografische Distanz zwischen zwei Kollektoren | `src/collector_registry.rs` | Haversine-Formel (R=6371km), kein externe Crate; 4 Tests |
+| ✅ 1.2.4 | Erwartete Lichtlaufzeit zwischen zwei Kollektoren | `src/collector_registry.rs` | `dist_km / 200.0` ms (Glasfaser ≈ 2/3 c); 5 Tests (inkl. 2 Bonus) |
 
 ```rust
 // Beispiel-Einträge (statische Compile-Zeit-Daten):
@@ -137,12 +145,12 @@ Kollektoren innerhalb eines Zeitfensters zu einem `PropagationEvent`.
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 1.3.1 | `PropagationEvent` Datenstruktur | `src/propagation.rs` | Prefix + AS-Path + `BTreeMap<collector, timestamp>` |
-| 1.3.2 | `PropagationAggregator` mit 10s Zeitfenster | `src/propagation.rs` | `DashMap<GroupKey, PropagationEvent>`, Cleanup-Task |
-| 1.3.3 | Group-Key definieren | `src/propagation.rs` | `(prefix_normalized, origin_as, as_path_hash)` |
-| 1.3.4 | NATS-Consumer: liest `bgp-events`, schreibt `bgp-propagation` | `src/propagation.rs` | Neues NATS-Subject für aggregierte Events |
-| 1.3.5 | Mindest-Schwelle: ≥ 3 Kollektoren pro Event | `src/propagation.rs` | Unter 3 Kollektoren: kein auswertbares Propagations-Event |
-| 1.3.6 | Unit-Tests: Aggregation, Timeout, Key-Kollision | `tests/propagation_test.rs` | Edge-Cases abdecken |
+| ✅ 1.3.1 | `PropagationEvent` Datenstruktur | `src/propagation.rs` | `IpNet` + `BTreeMap<String, f64>` + abgeleitete Felder (first/last/spread_ms/arrival_order); `serde::Serialize+Deserialize`; `ipnet` serde-feature |
+| ✅ 1.3.2 | `PropagationAggregator` mit 10s Zeitfenster | `src/propagation.rs` | `DashMap<GroupKey, PendingGroup>`; `add()` + `flush_expired()`; `impl Default` |
+| ✅ 1.3.3 | Group-Key definieren | `src/propagation.rs` | `GroupKey { prefix, origin_as, path_hash }`; Polynomial-Hash `wrapping_mul(31)` |
+| ✅ 1.3.4 | NATS-Consumer: liest `bgp.events`, schreibt `bgp.propagation` | `src/propagation.rs` | `run(self: Arc<Self>, nats_url)` async; Flush-Task jede 1s |
+| ✅ 1.3.5 | Mindest-Schwelle: ≥ 3 Kollektoren pro Event | `src/propagation.rs` | Guard in Haupt-Loop + Flush-Task |
+| ✅ 1.3.6 | Unit-Tests: Aggregation, Group-Key, Arrival-Order | `src/propagation.rs` | 8 Tests total: spread/order/single/threshold/group-key×2/aggregator×2 |
 
 ```rust
 pub struct PropagationEvent {
@@ -168,10 +176,10 @@ RIPE stellt MRT-Files öffentlich bereit — kostenlos, seit 2001.
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 1.4.1 | MRT-Crate evaluieren und einbinden | `Cargo.toml` | `bgpkit-parser` (Rust, aktiv gepflegt, MRT + BMP Support) |
-| 1.4.2 | CLI-Tool: MRT-File → PropagationEvents (JSON-Lines) | `tools/mrt_replay/` | Neues Workspace-Member |
-| 1.4.3 | Download-Script für RIPE RIS Archive 2022–2025 | `scripts/download_mrt.sh` | `https://data.ris.ripe.net/rrcXX/` — alle 26 Kollektoren |
-| 1.4.4 | Gleiche `BgpRecord`-Struktur wie Live-Feed | `tools/mrt_replay/` | Gleicher Code-Pfad für Live und Historisch |
+| ✅ 1.4.1 | MRT-Crate einbinden + Workspace-Member | `Cargo.toml`, `tools/mrt_replay/Cargo.toml` | `bgpkit-parser = "0.10"` + clap/serde/tracing; bgp_stream `[workspace]` bereinigt |
+| ✅ 1.4.2 | CLI-Tool: MRT-File → JSON-Lines | `tools/mrt_replay/src/main.rs` | `BgpkitParser`, alle 8 Pflichtfelder, Progress-Log 100k, besseres Error-Handling, Bonus: Collector aus Dateiname |
+| ✅ 1.4.3 | Download-Script für RIPE RIS Archive | `scripts/download_mrt.sh` | 30 Tage/4 Kollektoren Standard; macOS+Linux kompatibel; idempotent; ausführbar |
+| ✅ 1.4.4 | Output-Format mit Live-Feed vereinheitlicht | `tools/mrt_replay/src/main.rs` | `//! # Output-Format` Doku; 2 Tests (required fields + non-empty collector) |
 
 ```bash
 # Datenquelle: RIPE RIS Archive (öffentlich, kostenlos)
@@ -507,15 +515,18 @@ trustwave/                          (umbenannt von log-gateway/)
 │   └── metrics.rs                  ← existiert ✅   (Prometheus)
 │
 ├── docs/
-│   ├── poc_results.md              ← Phase 3.3.4  (Backtesting-Ergebnisse)
-│   └── architecture.md
+│   ├── KONZEPTDOKUMENT.md          ← existiert ✅  Phase 0.1  (für Notar, 08.03.2026)
+│   ├── NDA_TEMPLATE.md             ← existiert ✅  Phase 0.4  (Anwaltsprüfung ausstehend)
+│   ├── poc_results.md              ← NEU Phase 3.3.4  (Backtesting-Ergebnisse)
+│   └── architecture.md             ← NEU Phase 5
 │
 ├── scripts/
-│   ├── download_mrt.sh             ← Phase 1.4.3
-│   └── download_hijack_data.sh     ← Phase 3.2.2
+│   ├── download_mrt.sh             ← NEU Phase 1.4.3
+│   └── download_hijack_data.sh     ← NEU Phase 3.2.2
 │
-├── TRUSTWAVE_ROADMAP.md            ← dieses Dokument
-└── PRODUCT_ROADMAP.md              ← PrefixGuard Legacy (Phase-Referenz)
+├── FEATURE_FREEZE.md               ← existiert ✅  Phase 0.2  (08.03.2026)
+├── TRUSTWAVE_ROADMAP.md            ← existiert ✅  dieses Dokument
+└── PRODUCT_ROADMAP.md              ← existiert ✅  PrefixGuard Legacy (Phase-Referenz)
 ```
 
 ---

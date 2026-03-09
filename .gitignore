@@ -11,6 +11,9 @@ gateway.log
 # Environment / secrets
 .env
 .env.*
+secrets/*.txt
+secrets/*.key
+secrets/*.pem
 
 # OS files
 .DS_Store

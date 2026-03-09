@@ -36,6 +36,8 @@ async fn test_detector_runner_integration() {
         origin_as: 65001,
         as_path: vec![65001],
         peer_asn: 65000,
+        collector: "unknown".to_string(),
+        peer_ip: "".to_string(),
     };
 
     tx.send(record1).await.unwrap();
@@ -49,6 +51,8 @@ async fn test_detector_runner_integration() {
         origin_as: 65002,
         as_path: vec![65002],
         peer_asn: 65000,
+        collector: "unknown".to_string(),
+        peer_ip: "".to_string(),
     };
 
     tx.send(record2).await.unwrap();
@@ -64,6 +68,8 @@ async fn test_detector_runner_integration() {
             65003, 65004, 65005, 65006, 65007, 65008, 65009, 65010, 65011, 65012, 65013,
         ],
         peer_asn: 65000,
+        collector: "unknown".to_string(),
+        peer_ip: "".to_string(),
     };
 
     tx.send(record3).await.unwrap();
@@ -77,6 +83,8 @@ async fn test_detector_runner_integration() {
         origin_as: 65004,
         as_path: vec![65004],
         peer_asn: 65000,
+        collector: "unknown".to_string(),
+        peer_ip: "".to_string(),
     };
 
     tx.send(record4).await.unwrap();
