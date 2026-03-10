@@ -14,7 +14,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
-COPY tools/bgp_stream/Cargo.toml ./tools/bgp_stream/Cargo.toml
+# Alle Workspace-Member Cargo.toml kopieren (cargo braucht sie zum Workspace-Laden)
+COPY tools/bgp_stream/Cargo.toml      ./tools/bgp_stream/Cargo.toml
+COPY tools/mrt_replay/Cargo.toml      ./tools/mrt_replay/Cargo.toml
+COPY tools/backtest/Cargo.toml        ./tools/backtest/Cargo.toml
+COPY tools/mrt_batch_parser/Cargo.toml ./tools/mrt_batch_parser/Cargo.toml
+# Stub-Sources für Workspace-Member (nicht gebaut, nur für Workspace-Auflösung)
+RUN mkdir -p tools/bgp_stream/src tools/mrt_replay/src tools/backtest/src tools/mrt_batch_parser/src \
+    && echo 'fn main(){}' > tools/bgp_stream/src/main.rs \
+    && echo 'fn main(){}' > tools/mrt_replay/src/main.rs \
+    && echo 'fn main(){}' > tools/backtest/src/main.rs \
+    && echo 'fn main(){}' > tools/mrt_batch_parser/src/main.rs
 COPY src/ ./src/
 COPY benches/ ./benches/
 COPY config/ ./config/
