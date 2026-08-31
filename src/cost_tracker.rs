@@ -71,7 +71,7 @@ impl CostTracker {
         }
 
         // Sort tenants by total_requests descending
-        tenants.sort_by(|a, b| b.total_requests.cmp(&a.total_requests));
+        tenants.sort_by_key(|a| std::cmp::Reverse(a.total_requests));
 
         GatewayCostSummary {
             total_tenants: tenants.len(),
