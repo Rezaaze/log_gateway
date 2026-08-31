@@ -91,7 +91,7 @@ impl ModelTrainer {
         }
 
         // Sort by modification time (newest first)
-        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.sort_by_key(|a| std::cmp::Reverse(a.1));
         let newest_path = entries.first().map(|(path, _)| path);
 
         let Some(path) = newest_path else {
