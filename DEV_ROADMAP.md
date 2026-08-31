@@ -1,4 +1,17 @@
 # log-gateway — Entwicklungs-Roadmap
+
+> ⚠️ **VERWORFEN (Stand 31.08.2026):** Dieser Entwurf ("kein persistenter
+> Storage, kein ClickHouse, rein stateless") widerspricht dem, was tatsächlich
+> gebaut wurde — ClickHouse-Export/Query-Layer, Tenant/Quota/Cost-Billing und
+> die Alert-Escalation-Pipeline sind fest im System verankert. Alle 21
+> Checkboxen in diesem Dokument sind unerledigt geblieben; es gibt keinen
+> Hinweis, dass seit 2026-03-07 daran weitergearbeitet wurde. Maßgeblich ist
+> **`TRUSTWAVE_ROADMAP.md`**. Dieses Dokument bleibt nur als historischer
+> Alternativentwurf erhalten.
+
+---
+
+# log-gateway — Entwicklungs-Roadmap (verworfener Entwurf)
 > Erstellungsdatum: 2026-03-07
 > Basis: NATS JetStream Streaming-Architektur (kein persistenter Storage)
 > Prinzip: Stateless Detection, kryptografische Wahrheit, 0% False Positives

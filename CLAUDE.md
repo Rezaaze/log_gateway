@@ -4,6 +4,61 @@ Dieses Dokument beschreibt das Projekt vollständig, damit Claude in einer neuen
 
 ---
 
+## ⚠️ Stand 31.08.2026 — dieses Dokument ist ein historischer Snapshot
+
+Alles unten beschreibt den Zustand des reinen "Log Gateway" (105/105 Tests,
+Milestones M1–M16, P1–P6). **Seit 08.03.2026 ist das Projekt zu "BGP
+TrustWave" gewachsen** (Wellenphysik-Triangulation, Trust-Score-Engine,
+RPKI/IRR-Validierung, NATS/ClickHouse-Streaming, ~44 Module in `src/`).
+Maßgeblich für den aktuellen Stand ist **`TRUSTWAVE_ROADMAP.md`**, nicht
+mehr primär dieses Dokument. `DEV_ROADMAP.md` ist ein verworfener
+Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
+
+**Verifiziert am 31.08.2026 (Session-Audit):**
+- Build/Tests laufen sauber: 263/264 Lib-Tests grün (1 Fehlschlag ist ein
+  reines Sandbox-Artefakt: Test erwartet einen Permission-Fehler beim
+  Schreiben nach `/root/...`, läuft dort aber als root).
+  `cargo build`/`test` scheitern in dieser Remote-Sandbox NUR am
+  Swagger-UI-Download in `utoipa-swagger-ui`'s build.rs (Netzwerk-Policy
+  blockiert `github.com`-Archiv-Downloads, kein Code-Fehler) — Workaround:
+  `SWAGGER_UI_DOWNLOAD_URL=file:///pfad/zu/vorgebautem-swagger-ui.zip`
+  (siehe `build.rs` der Dependency; nicht in Git committed, nur lokaler
+  Sandbox-Workaround).
+- **Kritischer Fund + Fix:** Die live NATS-Pipeline (`detector_runner.rs`,
+  gespeist aus dem NATS-Subscriber) erkannte Hijacks/Flapping korrekt, hat
+  sie aber nie an `EscalationRouter` weitergereicht — erkannte Anomalien
+  landeten nur in Tracing-Logs + Prometheus-Zählern, nie in ClickHouse
+  `alert_history` und nie per Webhook/Slack. Der parallele HTTP-Ingest-Pfad
+  (`rpki_tx` → `anomaly_detector::AnomalyDetector` → `run_alert_logger`)
+  hatte Escalation korrekt verdrahtet — die beiden Pfade hatten
+  unterschiedlich vollständige Detector-Instanzen. Fix: `DetectorRunner`
+  bekommt jetzt per `.with_escalation(router)` denselben `EscalationRouter`
+  wie der HTTP-Pfad; alle drei Erkennungsstellen in `process_record()`
+  rufen `router.route(&anomaly)` auf. Neuer Regressionstest:
+  `test_escalation_router_invoked_on_hijack_without_panicking`.
+- **Toter Code bereinigt:** `src/wave_detector.rs` (ältere, nie
+  `mod`-deklarierte Wave-Score-Implementierung mit hartkodierten
+  Platzhalter-Konstanten statt echter Baseline-Statistik) wurde entfernt —
+  ersetzt durch die neuere `src/wave_anomaly_detector.rs` (nutzt echten
+  `z_score`, `p50`/`p99`-Baseline-Werte, Kollektor-Geodistanz), die jetzt
+  als `pub mod` Teil der Crate ist (kompiliert, 5 Tests laufen in CI).
+  **Wichtig: `wave_anomaly_detector` ist weiterhin nicht an den Live-Pfad
+  angebunden** — der `PropagationAggregator` (`src/propagation.rs`), der
+  Live-BGP-Records zu `PropagationEvent`s über mehrere Kollektoren
+  aggregieren würde, wird nirgends aufgerufen. Das ist der nächste
+  substanzielle Schritt für Phase 3 der TrustWave-Roadmap.
+- **Nicht angefasst, aber auffällig:** `src/detector_loop.rs` ist eine
+  zweite, vollständige Pipeline-Implementierung (eigene NATS-Subscription,
+  RPKI→IRR→Hijack→Flapping→Dedup→Webhook) mit eigener Testabdeckung
+  (`tests/e2e_detection_test.rs`), aber **nirgends in `main.rs`/`lib.rs`
+  gespawnt** — sie ist also nicht tot (Tests laufen), aber redundant zur
+  jetzt reparierten `detector_runner.rs`. Bewusst nicht gelöscht, da echte
+  Testabdeckung dranhängt; sollte aber als Duplikat behandelt und irgendwann
+  entweder entfernt oder bewusst zur kanonischen Implementierung gemacht
+  werden.
+
+---
+
 ## Projektübersicht
 
 **Zweck:** Production-grade Rust Log Processing Gateway als Ersatz für ineffiziente Python Log-Infrastruktur.

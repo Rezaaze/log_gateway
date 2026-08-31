@@ -52,6 +52,7 @@ pub mod sink;
 pub mod telemetry;
 pub mod tenant_api;
 pub mod tenant_manager;
+pub mod wave_anomaly_detector;
 pub mod wave_baseline;
 pub mod webhook;
 
@@ -267,7 +268,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
     tokio::spawn(anomaly_detector::run_alert_logger(
         alert_rx,
         metrics_for_alerts,
-        escalation_router,
+        escalation_router.clone(),
         alert_manager_client.clone(),
         reload_rx,
         None, // tenant_id from context/header (None at startup)
@@ -382,7 +383,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
             tokio::sync::mpsc::channel::<crate::nats_subscriber::BgpRecord>(64000);
 
         // Create detector runner — with RPKI/IRR enrichment if both caches are available
-        let detector_runner = Arc::new(match (&rpki_cache, &irr_cache) {
+        let mut detector_runner_builder = match (&rpki_cache, &irr_cache) {
             (Some(rpki), Some(irr)) => {
                 tracing::info!("DetectorRunner: RPKI+IRR enrichment enabled");
                 detector_runner::DetectorRunner::with_enrichment(Arc::clone(rpki), Arc::clone(irr))
@@ -391,7 +392,19 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
                 tracing::warn!("DetectorRunner: running without RPKI/IRR enrichment (enable RPKI in config for higher-confidence detection)");
                 detector_runner::DetectorRunner::new()
             }
-        });
+        };
+        if let Some(ref router) = escalation_router {
+            tracing::info!(
+                "DetectorRunner: escalation router attached (persist + dedup + webhook)"
+            );
+            detector_runner_builder = detector_runner_builder.with_escalation(Arc::clone(router));
+        } else {
+            tracing::warn!(
+                "DetectorRunner: no escalation router available — detected anomalies from the \
+                 NATS stream will only be logged and counted, not persisted or sent to webhooks"
+            );
+        }
+        let detector_runner = Arc::new(detector_runner_builder);
 
         // Clone for task
         let detector_runner_clone = Arc::clone(&detector_runner);

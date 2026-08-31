@@ -195,7 +195,7 @@ werden über Kollektoren korrekt gruppiert. MRT-Archivdaten können eingelesen w
 ---
 
 ## Phase 2 — Wellenbaseline
-**Woche 4–8 | Ziel: "Normales" Propagationsverhalten mathematisch beschreiben**
+**Woche 4–8 | ✅ Erledigt — 08.03.2026 (`src/wave_baseline.rs`, `tools/baseline_builder/`, verifiziert 31.08.2026)**
 
 ### Abschnitt 2.1 — Baseline-Datenstruktur
 
@@ -254,7 +254,25 @@ statistisch verlässliche Propagations-Baseline aus historischen Daten.
 ---
 
 ## Phase 3 — Wave Anomaly Detector
-**Woche 8–12 | Ziel: BGP-Hijacks durch Wellenabweichung erkennen**
+**Woche 8–12 | ⏳ Teilweise erledigt — Scoring-Logik existiert, aber nicht ans Live-System angebunden (Stand 31.08.2026)**
+
+> **Realitäts-Check (31.08.2026):** Zwei konkurrierende Implementierungen der
+> Wellenphysik-Signale wurden gefunden: `src/wave_detector.rs` (ältere Version
+> mit teils hartkodierten Platzhalter-Konstanten statt echter Baseline-Statistik)
+> und `src/wave_anomaly_detector.rs` (neuere Version, nutzt echte `z_score`/
+> `p50`/`p99`-Baseline-Werte + Kollektor-Geodistanz für ein `propagation_speed`-
+> Signal). Die ältere Version wurde entfernt, die neuere ist jetzt als
+> `pub mod wave_anomaly_detector` Teil der Crate (kompiliert, 5 Tests laufen in
+> CI) — **aber sie wird nirgends mit Live-BGP-Daten gefüttert.** Der
+> `PropagationAggregator` (`src/propagation.rs`), der aus einzelnen BGP-Records
+> `PropagationEvent`s über mehrere Kollektoren bauen würde, ist ebenfalls nicht
+> in `detector_runner.rs`/NATS-Pfad eingehängt. Um Phase 3 wirklich
+> abzuschließen, fehlt: (1) `PropagationAggregator` in den Live-Pfad einhängen,
+> (2) Signal-Namen zwischen Roadmap-Spezifikation (spread/order/delta/path/region)
+> und tatsächlicher Implementierung (spread_z_score/outlier_factor/
+> collector_gap_ratio/arrival_order_entropy/propagation_speed) abgleichen oder
+> Roadmap aktualisieren, (3) Abschnitt 3.2/3.3 (Backtesting/Kalibrierung)
+> beginnen — dafür fehlen noch die historischen Hijack-MRT-Daten.
 
 ### Abschnitt 3.1 — Wave Score Berechnung
 

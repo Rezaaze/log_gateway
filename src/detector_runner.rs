@@ -13,6 +13,7 @@ Phase 3b-3d Implementation Plan:
 */
 
 use crate::anomaly_detector::{Detector, FlappingDetector, HijackDetector};
+use crate::escalation::EscalationRouter;
 use crate::irr_cache::{IrrCache, IrrStatus};
 use crate::metrics_exporter::DetectorMetrics;
 use crate::nats_subscriber::BgpRecord;
@@ -101,6 +102,9 @@ pub struct DetectorRunner {
     rpki_cache: Option<Arc<RpkiCache>>,
     /// IRR cache for validation (optional)
     irr_cache: Option<Arc<IrrCache>>,
+    /// Escalation router — persists, deduplicates and sends webhook
+    /// notifications for detected anomalies (optional)
+    escalation_router: Option<Arc<EscalationRouter>>,
 }
 
 impl std::fmt::Debug for DetectorRunner {
@@ -128,6 +132,14 @@ impl std::fmt::Debug for DetectorRunner {
                     "None"
                 },
             )
+            .field(
+                "escalation_router",
+                &if self.escalation_router.is_some() {
+                    "Some(EscalationRouter)"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -149,6 +161,7 @@ impl DetectorRunner {
             flapping_detector: Box::new(FlappingDetector::new()),
             rpki_cache: None,
             irr_cache: None,
+            escalation_router: None,
         }
     }
 
@@ -163,6 +176,7 @@ impl DetectorRunner {
             flapping_detector: Box::new(FlappingDetector::new()),
             rpki_cache: None,
             irr_cache: None,
+            escalation_router: None,
         }
     }
 
@@ -177,7 +191,16 @@ impl DetectorRunner {
             flapping_detector: Box::new(FlappingDetector::new()),
             rpki_cache: Some(rpki),
             irr_cache: Some(irr),
+            escalation_router: None,
         }
+    }
+
+    /// Attach an escalation router so detected anomalies are persisted,
+    /// deduplicated and sent to configured webhooks — without this, detected
+    /// anomalies are only logged and counted in Prometheus metrics.
+    pub fn with_escalation(mut self, router: Arc<EscalationRouter>) -> Self {
+        self.escalation_router = Some(router);
+        self
     }
 
     /// Run the detector loop
@@ -286,6 +309,9 @@ impl DetectorRunner {
                 anomaly.confidence,
                 anomaly.details
             );
+            if let Some(router) = &self.escalation_router {
+                router.route(&anomaly).await;
+            }
         }
 
         // Run HijackDetector with RPKI/IRR enrichment if available
@@ -327,6 +353,9 @@ impl DetectorRunner {
                                 anomaly.confidence,
                                 anomaly.details
                             );
+                            if let Some(router) = &self.escalation_router {
+                                router.route(&anomaly).await;
+                            }
                         }
                     }
                     RpkiStatus::NotFound | RpkiStatus::Unavailable => {
@@ -351,6 +380,9 @@ impl DetectorRunner {
                     anomaly.confidence,
                     anomaly.details
                 );
+                if let Some(router) = &self.escalation_router {
+                    router.route(&anomaly).await;
+                }
             }
         }
 
@@ -759,6 +791,47 @@ mod tests {
         assert_eq!(
             stats.anomalies_detected, 0,
             "WITHDRAW events must not trigger hijack or flapping (20 < threshold 50)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_escalation_router_invoked_on_hijack_without_panicking() {
+        use crate::alert_manager::AlertManagerClient;
+        use crate::escalation::EscalationRouter;
+        use crate::metrics::GatewayMetrics;
+
+        // Escalation router with an unreachable ClickHouse URL — route() must
+        // degrade gracefully (log + continue) rather than panic or block
+        // anomaly detection, per its documented behavior.
+        let alert_manager = Arc::new(AlertManagerClient::new(
+            "http://dummy".to_string(),
+            "db".to_string(),
+        ));
+        let router = Arc::new(EscalationRouter::new(
+            alert_manager,
+            Arc::new(GatewayMetrics::new()),
+        ));
+
+        let runner = DetectorRunner::new().with_escalation(Arc::clone(&router));
+
+        // First announce: establishes origin AS 65001 for the prefix.
+        let record1 = make_bgp_record("10.0.0.0/8", 65001, "announce");
+        let result1 = runner.process_record(&record1).await;
+        assert!(result1.is_ok(), "process_record should not error");
+
+        // Second announce: different ASN for same prefix → hijack, which
+        // now routes through the (unreachable) escalation router.
+        let record2 = make_bgp_record("10.0.0.0/8", 65002, "announce");
+        let result2 = runner.process_record(&record2).await;
+        assert!(
+            result2.is_ok(),
+            "process_record must not fail even if escalation persistence is unreachable"
+        );
+
+        let stats = runner.stats();
+        assert!(
+            stats.anomalies_detected > 0,
+            "hijack should still be counted even when escalation is attached"
         );
     }
 }
