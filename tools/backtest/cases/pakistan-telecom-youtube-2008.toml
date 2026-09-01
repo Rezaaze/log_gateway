@@ -1,0 +1,32 @@
+# Pakistan Telecom / YouTube BGP hijack, 24 February 2008.
+#
+# Verified against RIPE NCC's own case study of this incident (RIPE RIS is
+# the same data source this project's MRT archive tooling reads from):
+#   https://www.ripe.net/about-us/news/youtube-hijacking-a-ripe-ncc-ris-case-study/
+#
+# Background: Pakistan Telecom configured a null route for 208.65.153.0/24
+# to block YouTube domestically, then leaked that route to its upstream
+# PCCW Global (AS3491), which propagated it globally — redirecting YouTube
+# traffic worldwide for roughly 2 hours before PCCW withdrew it.
+
+name = "pakistan-telecom-youtube-2008"
+prefix = "208.65.153.0/24"
+legitimate_origin_as = 36561   # YouTube
+hijacker_origin_as   = 17557   # Pakistan Telecom
+hijack_start = "2008-02-24T18:47:00Z"   # AS17557 begins announcing the prefix
+hijack_end   = "2008-02-24T21:01:00Z"   # AS3491 (PCCW Global) withdraws it
+
+# NOT YET POPULATED — fill in before running:
+#   mrt_data_dir: MRT archive files covering the incident window (ideally a
+#     margin before/after 18:47-21:01 UTC), all available RIPE RIS
+#     collectors, laid out as data/mrt/rrcXX/2008.02/updates.20080224.*.gz
+#     (download from https://data.ris.ripe.net/rrcXX/2008.02/)
+#   baseline_path: a baseline built via tools/baseline_builder from MRT
+#     archive data ending BEFORE 2008-02-24T18:47:00Z (weeks of history for
+#     208.65.153.0/24 under AS36561, to reach the >=30-sample threshold) —
+#     tools/backtest refuses to run otherwise (see the data_cutoff_ts check
+#     in tools/backtest/src/main.rs)
+mrt_data_dir  = "data/mrt/pakistan-telecom-2008"
+baseline_path = "data/baselines/pakistan-telecom-2008-pre-incident.bin.zst"
+
+detection_threshold = 0.5
