@@ -392,6 +392,17 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
                 detector_runner::DetectorRunner::new()
             }
         };
+
+        // Share the HTTP-ingest path's HijackDetector instance instead of
+        // DetectorRunner's own default (empty, never warmed up) one — see
+        // with_hijack_detector's doc comment for why this matters: without
+        // it, every prefix's first sighting on the live NATS path is
+        // flagged as a possible hijack on every restart.
+        if let Some(ref detector_arc) = anomaly_detector {
+            detector_runner_builder =
+                detector_runner_builder.with_hijack_detector(detector_arc.hijack_detector_arc());
+        }
+
         if let Some(ref router) = escalation_router {
             tracing::info!(
                 "DetectorRunner: escalation router attached (persist + dedup + webhook)"

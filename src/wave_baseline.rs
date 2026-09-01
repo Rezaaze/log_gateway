@@ -109,6 +109,13 @@ pub struct WaveBaselineEntry {
     pub p99_spread_ms: f64,
     pub max_spread_ms: f64,
     pub std_dev: f64,
+    /// Collectors ranked by mean arrival position across historical
+    /// samples (index 0 = arrives earliest on average). Empty for entries
+    /// built before this field existed, or with too few samples to be
+    /// meaningful — callers must treat empty as "no expectation available"
+    /// rather than "always first place".
+    #[serde(default)]
+    pub expected_order: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,13 +215,22 @@ fn path_hash(as_path: &[u32]) -> u64 {
     })
 }
 
+/// (prefix, origin_as, as_path_hash) — the grouping key `BaselineBuilder`
+/// accumulates samples under.
+type GroupKey = (String, u32, u64);
+
+/// Per group: collector -> (sum of arrival-rank positions, count) — rank 0
+/// means "arrived first". Used to compute `WaveBaselineEntry::expected_order`.
+type RankSums = std::collections::HashMap<String, (f64, u64)>;
+
 /// Accumulates `PropagationEvent`s (typically parsed from historical MRT
 /// archive data) into a `WaveBaseline`, grouped by (prefix, origin_as,
 /// as_path_hash). Only groups that reach `min_samples` observations produce
 /// a baseline entry — see Abschnitt 2.1.4/2.2.2 in TRUSTWAVE_ROADMAP.md
 /// ("Stabilität-Counter: ab n ≥ 30 Samples gilt Baseline als verlässlich").
 pub struct BaselineBuilder {
-    samples: std::collections::HashMap<(String, u32, u64), Vec<f64>>,
+    samples: std::collections::HashMap<GroupKey, Vec<f64>>,
+    rank_sums: std::collections::HashMap<GroupKey, RankSums>,
     min_samples: usize,
     /// Latest `last_arrival` seen across all fed events — becomes the
     /// resulting baseline's `data_cutoff_ts`.
@@ -231,6 +247,7 @@ impl BaselineBuilder {
     pub fn new() -> Self {
         Self {
             samples: std::collections::HashMap::new(),
+            rank_sums: std::collections::HashMap::new(),
             min_samples: 30,
             max_observed_ts: 0.0,
         }
@@ -243,15 +260,26 @@ impl BaselineBuilder {
         self
     }
 
-    /// Feeds one `PropagationEvent`'s spread into its (prefix, origin_as,
-    /// as_path) group.
+    /// Feeds one `PropagationEvent`'s spread and arrival order into its
+    /// (prefix, origin_as, as_path) group.
     pub fn add_event(&mut self, event: &crate::propagation::PropagationEvent) {
         let key = (
             event.prefix.to_string(),
             event.origin_as,
             path_hash(&event.as_path),
         );
-        self.samples.entry(key).or_default().push(event.spread_ms);
+        self.samples
+            .entry(key.clone())
+            .or_default()
+            .push(event.spread_ms);
+
+        let ranks = self.rank_sums.entry(key).or_default();
+        for (rank, collector) in event.arrival_order.iter().enumerate() {
+            let entry = ranks.entry(collector.clone()).or_insert((0.0, 0));
+            entry.0 += rank as f64;
+            entry.1 += 1;
+        }
+
         if event.last_arrival > self.max_observed_ts {
             self.max_observed_ts = event.last_arrival;
         }
@@ -277,6 +305,21 @@ impl BaselineBuilder {
                 let mut sorted = values.clone();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 let stats = compute_spread_stats(&sorted);
+
+                let mut expected_order: Vec<(String, f64)> = self
+                    .rank_sums
+                    .get(&(prefix.clone(), *origin_as, *as_path_hash))
+                    .map(|ranks| {
+                        ranks
+                            .iter()
+                            .map(|(collector, (sum, count))| {
+                                (collector.clone(), sum / *count as f64)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                expected_order.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
                 WaveBaselineEntry {
                     prefix: prefix.clone(),
                     origin_as: *origin_as,
@@ -288,6 +331,7 @@ impl BaselineBuilder {
                     p99_spread_ms: percentile(&sorted, 99.0),
                     max_spread_ms: stats.max_ms,
                     std_dev: stats.std_ms,
+                    expected_order: expected_order.into_iter().map(|(c, _)| c).collect(),
                 }
             })
             .collect();
@@ -381,6 +425,7 @@ mod tests {
             p99_spread_ms: 75.0,
             max_spread_ms: 100.0,
             std_dev: 15.0,
+            expected_order: vec!["rrc00".to_string(), "rrc12".to_string()],
         };
         let mut baseline = baseline.clone();
         baseline.entries.push(entry);
@@ -484,6 +529,45 @@ mod tests {
         assert!(entry.p50_spread_ms <= entry.p95_spread_ms);
         assert!(entry.p95_spread_ms <= entry.p99_spread_ms);
         assert!(entry.p99_spread_ms <= entry.max_spread_ms);
+    }
+
+    #[test]
+    fn test_baseline_builder_tracks_expected_order_by_mean_rank() {
+        use crate::propagation::PropagationEvent;
+        use std::collections::BTreeMap;
+
+        fn event_with_order(order: &[&str]) -> PropagationEvent {
+            let mut arrivals = BTreeMap::new();
+            for (i, collector) in order.iter().enumerate() {
+                arrivals.insert(collector.to_string(), 1000.0 + i as f64 * 0.001);
+            }
+            PropagationEvent::new(
+                "8.8.8.0/24".parse().unwrap(),
+                15169,
+                vec![1103, 15169],
+                arrivals,
+            )
+        }
+
+        let mut builder = BaselineBuilder::new().with_min_samples(1);
+        // 20 samples: rrcA, rrcB, rrcC (ranks 0,1,2). 10 samples: rrcB,
+        // rrcA, rrcC (ranks 0,1,2 for B,A,C) — a minority reordering that
+        // should NOT change the overall majority-order winner.
+        for _ in 0..20 {
+            builder.add_event(&event_with_order(&["rrcA", "rrcB", "rrcC"]));
+        }
+        for _ in 0..10 {
+            builder.add_event(&event_with_order(&["rrcB", "rrcA", "rrcC"]));
+        }
+
+        let baseline = builder.build();
+        assert_eq!(baseline.len(), 1);
+        // Mean rank: A = (20*0 + 10*1)/30 = 0.33, B = (20*1 + 10*0)/30 = 0.67,
+        // C = 2.0 always -> expected order A, B, C.
+        assert_eq!(
+            baseline.entries[0].expected_order,
+            vec!["rrcA".to_string(), "rrcB".to_string(), "rrcC".to_string()]
+        );
     }
 
     #[test]
