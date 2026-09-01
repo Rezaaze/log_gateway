@@ -11,11 +11,11 @@
 
 | Phase | Titel | Zeitraum | Ziel | Status |
 |---|---|---|---|---|
-| 0 | IP-Schutz & Projekt-Reset | Woche 1 | Rechtlich absichern, Fokus setzen | ⏳ Teilweise erledigt |
-| 1 | Daten-Fundament | Woche 2–4 | Rohdaten korrekt erfassen | 🔲 Offen |
-| 2 | Wellenbaseline | Woche 4–8 | Normales Propagationsverhalten modellieren | 🔲 Offen |
-| 3 | Wave Anomaly Detector | Woche 8–12 | Hijacks durch Wellenabweichung erkennen | 🔲 Offen |
-| 4 | Trust Score Engine | Woche 12–16 | Alle Signale zu einem Score kombinieren | 🔲 Offen |
+| 0 | IP-Schutz & Projekt-Reset | Woche 1 | Rechtlich absichern, Fokus setzen | ⏳ Teilweise erledigt (menschliche Aktionen ausstehend) |
+| 1 | Daten-Fundament | Woche 2–4 | Rohdaten korrekt erfassen | ✅ Erledigt |
+| 2 | Wellenbaseline | Woche 4–8 | Normales Propagationsverhalten modellieren | ✅ Erledigt (01.09.2026: `tools/baseline_builder`-Build-Bruch behoben) |
+| 3 | Wave Anomaly Detector | Woche 8–12 | Hijacks durch Wellenabweichung erkennen | ⏳ 3.1 an Live-Pfad angebunden (01.09.2026); 3.2 Backtesting + 3.3 Kalibrierung offen |
+| 4 | Trust Score Engine | Woche 12–16 | Alle Signale zu einem Score kombinieren | 🔲 Offen — wartet auf Entscheidungs-Gate nach 3.3 |
 | 5 | Echtzeit-System | Monat 4–6 | Live-Betrieb, Validierung | 🔲 Offen |
 | 6 | BGP-Speaker & Pilot | Monat 6–9 | Aktives Routing, erster Kunde | 🔲 Offen |
 | 7 | Produktreife | Monat 9–18 | Skalierung, Zertifizierungen | 🔲 Offen |
