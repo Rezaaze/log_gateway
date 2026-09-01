@@ -46,6 +46,15 @@ struct Args {
     /// Mindestanzahl Kollektoren pro PropagationEvent
     #[arg(long, default_value_t = 3)]
     min_collectors: usize,
+
+    /// Mindestanzahl Samples pro (Präfix, Origin-AS, Pfad)-Gruppe, damit ein
+    /// Baseline-Eintrag als verlässlich gilt (siehe Abschnitt 2.1.4/2.2.2:
+    /// "ab n >= 30 Samples gilt Baseline als verlässlich"). Niedriger setzen
+    /// erlaubt einen kleineren, schnelleren Testlauf auf Kosten statistischer
+    /// Verlässlichkeit — nicht für eine echte Kalibrierung (Abschnitt 3.3)
+    /// geeignet, nur für einen ersten Funktionsnachweis.
+    #[arg(long, default_value_t = 30)]
+    min_samples: usize,
 }
 
 /// Einfacher Schlüssel für das Zusammenführen über Kollektoren
@@ -215,7 +224,7 @@ fn main() -> Result<()> {
     let start = Instant::now();
 
     // Baseline-Builder
-    let mut builder = BaselineBuilder::new();
+    let mut builder = BaselineBuilder::new().with_min_samples(args.min_samples);
     let mut total_events = 0u64;
     let mut good_events = 0u64;
     let mut total_bytes = 0u64;
@@ -295,7 +304,11 @@ fn main() -> Result<()> {
             0.0
         }
     );
-    eprintln!("Baseline-Einträge: {} (reliable)", store.len());
+    eprintln!(
+        "Baseline-Einträge: {} (reliable, min_samples={})",
+        store.len(),
+        args.min_samples
+    );
     eprintln!("Ausgabe:           {}", args.output.display());
 
     Ok(())
