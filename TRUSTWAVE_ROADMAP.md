@@ -289,7 +289,36 @@ statistisch verlässliche Propagations-Baseline aus historischen Daten.
 > `[wave]`-Configsektion, standardmäßig aktiv, ungefährlich ohne Baseline.
 > Damit ist Abschnitt 3.1 technisch erledigt — die Tabelle unten wurde von
 > der ursprünglichen Spezifikation auf die tatsächliche Implementierung
-> umgestellt (siehe Hinweis darunter). **Abschnitt 3.2 (Backtesting-Tooling)
+> umgestellt (siehe Hinweis darunter).
+>
+> **Update 01.09.2026 — kritische Review der Erkennungslogik (nicht nur
+> Verdrahtung):** eine gezielte Prüfung, ob die Signale selbst überhaupt
+> etwas Sinnvolles messen, deckte drei echte Fehler auf und wurde direkt
+> behoben:
+> 1. `spread_z_score` clampte auf `[0.0, 1.0]` und verwarf damit jeden
+>    *negativen* Z-Score — also genau den Fall "Spread deutlich kleiner als
+>    Baseline, kam verdächtig gleichzeitig an", das eigentliche
+>    Hijack-Muster aus der Kernidee dieses Projekts. Fix: `abs(z)/3.0`,
+>    symmetrisch.
+> 2. `calculate_order_entropy` berechnete `unique_count / max_possible`
+>    wobei beide Werte immer identisch waren (`arrival_order.len()`) — lieferte
+>    also konstant 1.0 statt echter Reihenfolge-Abweichung. Fix: `WaveBaselineEntry`
+>    bekam ein neues Feld `expected_order` (Kollektoren nach mittlerer
+>    Ankunfts-Rangfolge aus der Baseline), `BaselineBuilder` trackt das jetzt
+>    mit; das Signal (umbenannt zu `order_deviation`) vergleicht die
+>    tatsächlichen ersten 3 Kollektoren gegen die erwarteten.
+> 3. **Anycast-Lücke (dokumentiert, nicht vollständig gelöst):** `propagation_speed`
+>    ist absolut/physikbasiert, nicht baseline-relativ — legitimes Anycast
+>    (Cloudflare 1.1.1.1, Google 8.8.8.8, DNS-Root-Server) kündigt dasselbe
+>    Präfix bewusst gleichzeitig von vielen Orten an und sieht für dieses
+>    Signal strukturell identisch aus wie ein Hijack. Der jetzt symmetrische
+>    `spread_z_score` ist baseline-relativ und dadurch für Präfixe mit
+>    ausreichender Historie bereits deutlich robuster; `propagation_speed`
+>    bleibt aber ein bekanntes Restrisiko ohne Baseline-Bezug. Echte Lösung
+>    (Anycast-Allowlist oder Erkennung "diese Baseline ist historisch immer
+>    schon simultan") ist ein eigenes Vorhaben, kein Bugfix.
+>
+> **Abschnitt 3.2 (Backtesting-Tooling)
 > ist gebaut und gegen echte RIPE-Daten smoke-getestet — die drei konkreten
 > historischen Fallstudien und die dafür nötigen Wochen an Vor-Hijack-Daten
 > fehlen noch. Abschnitt 3.3 (Kalibrierung) ist komplett offen.** Das
@@ -307,15 +336,15 @@ statistisch verlässliche Propagations-Baseline aus historischen Daten.
 | # | Task | Datei | Details |
 |---|---|---|---|
 | 3.1.1 | `WaveAnomalyDetector` struct | `src/wave_anomaly_detector.rs` | Nimmt `PropagationEvent` + `WaveBaseline`, gibt `AnomalyScore` (0.0–1.0) zurück |
-| 3.1.2 | Signal 1: Spread-Z-Score | `src/wave_anomaly_detector.rs` | `z_score(spread_ms, baseline.p50, baseline.std_dev) / 3.0`, geclampt auf [0,1] |
+| 3.1.2 | Signal 1: Spread-Z-Score | `src/wave_anomaly_detector.rs` | `abs(z_score(spread_ms, baseline.p50, baseline.std_dev)) / 3.0`, geclampt auf [0,1] — **symmetrisch seit 01.09.2026** (vorher wurden negative Z-Scores, das eigentliche Hijack-Muster "zu simultan", auf 0 abgeschnitten) |
 | 3.1.3 | Signal 2: Ausreißer-Faktor | `src/wave_anomaly_detector.rs` | `spread_ms > baseline.p99` → 1.0, sonst 0.0 |
 | 3.1.4 | Signal 3: Kollektor-Lücken-Verhältnis | `src/wave_anomaly_detector.rs` | Anteil der Ankunfts-Paare mit > 4ms Lücke — viele gleichzeitige Ankünfte sind untypisch |
-| 3.1.5 | Signal 4: Ankunftsreihenfolge-Entropie | `src/wave_anomaly_detector.rs` | Verhältnis eindeutiger zu maximal möglichen Ankunftszeitpunkten |
-| 3.1.6 | Signal 5: Propagationsgeschwindigkeit | `src/wave_anomaly_detector.rs` | `spread_ms` relativ zur Lichtlaufzeit über die größte beobachtete Kollektor-Geodistanz (`collector_registry::distance_between_collectors`) |
-| 3.1.7 | Gewichtete Kombination → `AnomalyScore` | `src/wave_anomaly_detector.rs` | Default: Spread(0.40) + Outlier(0.30) + Gap(0.15) + Entropie(0.10) + Speed(0.05), konfigurierbar über `AnomalyDetectorConfig` |
+| 3.1.5 | Signal 4: Reihenfolge-Abweichung | `src/wave_anomaly_detector.rs` | **Neu implementiert (01.09.2026):** Überlapp der tatsächlichen ersten 3 Kollektoren mit `baseline.expected_order` (mittlere Rangfolge aus Historie). Vorher: `calculate_order_entropy` berechnete eine Konstante (immer 1.0), keine echte Reihenfolgeprüfung |
+| 3.1.6 | Signal 5: Propagationsgeschwindigkeit | `src/wave_anomaly_detector.rs` | `spread_ms` relativ zur Lichtlaufzeit über die größte beobachtete Kollektor-Geodistanz. **Bekannte Lücke:** nicht baseline-relativ, kann legitimes Anycast nicht von einem Hijack unterscheiden (siehe Verlaufs-Hinweis oben) |
+| 3.1.7 | Gewichtete Kombination → `AnomalyScore` | `src/wave_anomaly_detector.rs` | Default: Spread(0.40) + Outlier(0.30) + Gap(0.15) + Reihenfolge(0.10) + Speed(0.05), konfigurierbar über `AnomalyDetectorConfig` — Gewichte sind Platzhalter vor Kalibrierung (Abschnitt 3.3) |
 | 3.1.8 | Fallback ohne Baseline | `src/wave_anomaly_detector.rs` | Kein Baseline-Eintrag gefunden → `AnomalyScore::default()`, Klassifikation `Normal` |
-| 3.1.9 | Unit-Tests | `src/wave_anomaly_detector.rs` (inline `#[cfg(test)]`) | 5 Tests: z-Score, No-Baseline, Schwellenwerte, Gap-Ratio, Pfad-Hash-Konsistenz |
-| 3.1.10 | Live-Anbindung | `src/detector_runner.rs`, `src/lib.rs` | `PropagationAggregator` im NATS-Pfad, 2s-Flush-Task, `[wave]`-Config, Escalation-Routing — 2 zusätzliche Tests |
+| 3.1.9 | Unit-Tests | `src/wave_anomaly_detector.rs`, `src/wave_baseline.rs` (inline `#[cfg(test)]`) | 10 Tests: z-Score (inkl. Symmetrie), No-Baseline, Schwellenwerte, Gap-Ratio, Pfad-Hash-Konsistenz, Reihenfolge-Abweichung (2), Erwartete-Reihenfolge-Tracking |
+| 3.1.10 | Live-Anbindung | `src/detector_runner.rs`, `src/lib.rs` | `PropagationAggregator` im NATS-Pfad, 2s-Flush-Task, `[wave]`-Config, Escalation-Routing, geteilter `HijackDetector` zwischen HTTP- und NATS-Pfad — 3 zusätzliche Tests |
 
 `AnomalyClassification` ersetzt den ursprünglich geplanten reinen Float-Score
 mit drei Stufen: `Normal` (< 0.3), `Suspicious` (0.3–0.6), `Anomalous` (≥ 0.6).
@@ -329,11 +358,11 @@ pub struct AnomalyScore {
 }
 
 pub struct Signals {
-    pub spread_z_score:        f64,
-    pub outlier_factor:        f64,
-    pub collector_gap_ratio:   f64,
-    pub arrival_order_entropy: f64,
-    pub propagation_speed:     f64,
+    pub spread_z_score:      f64,
+    pub outlier_factor:      f64,
+    pub collector_gap_ratio: f64,
+    pub order_deviation:     f64,
+    pub propagation_speed:   f64,
 }
 ```
 

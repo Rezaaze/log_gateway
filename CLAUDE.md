@@ -15,7 +15,7 @@ mehr primär dieses Dokument. `DEV_ROADMAP.md` ist ein verworfener
 Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
 
 **Verifiziert am 31.08.2026 (Session-Audit), zuletzt aktualisiert 01.09.2026:**
-- Build/Tests laufen sauber: 267/268 Lib-Tests grün (1 Fehlschlag ist ein
+- Build/Tests laufen sauber: 271/272 Lib-Tests grün (1 Fehlschlag ist ein
   reines Sandbox-Artefakt: Test erwartet einen Permission-Fehler beim
   Schreiben nach `/root/...`, läuft dort aber als root). `cargo check
   --workspace` (alle Workspace-Member, nicht nur die Haupt-Crate) ist
@@ -91,6 +91,38 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
   mehrwöchige Vor-Hijack-Baseline-Daten — das ist der eigentlich große
   Download, nicht die ±2h Hijack-Daten. Details siehe `TRUSTWAVE_ROADMAP.md`
   Abschnitt 3.2.
+- **Update 01.09.2026 — kritische Review der Erkennungslogik + 4 Fixes:**
+  Auf explizite Anfrage ("ist die Funktion überhaupt sinnig?") wurde nicht
+  nur die Verdrahtung, sondern die eigentliche Detection-Logik geprüft.
+  Vier reale Funde, alle behoben bis auf den letzten (bewusst dokumentiert,
+  kein Bugfix):
+  1. **`HijackDetector`-Cold-Start:** `DetectorRunner`s eigene, nie
+     aufgewärmte `HijackDetector`-Instanz flaggte jede Präfix-Erstsichtung
+     als Hijack — bei jedem Neustart praktisch die gesamte sichtbare
+     globale Routing-Tabelle. Live im eigenen Funktionstest reproduziert.
+     Fix: geteilte, von `AnomalyDetector` per ClickHouse-Warmup vorbefüllte
+     Instanz statt zweier getrennter Kopien.
+  2. **Asymmetrischer Z-Score-Clamp:** `spread_z_score` clampte auf
+     `[0.0, 1.0]` und verwarf damit jeden negativen Z-Score — genau das
+     "kam verdächtig gleichzeitig an"-Muster, das namensgebend für das
+     ganze Projekt ist. Fix: `abs(z)/3.0`, symmetrisch.
+  3. **Totes Signal:** `calculate_order_entropy` berechnete
+     `unique_count/max_possible`, wobei beide Werte immer identisch waren
+     (`arrival_order.len()`) — lieferte konstant 1.0, keine echte
+     Reihenfolgeprüfung. Fix: `WaveBaselineEntry.expected_order` (neues
+     Feld, von `BaselineBuilder` per mittlerer Ankunfts-Rangfolge
+     getrackt) + echte Überlapp-Berechnung, umbenannt zu `order_deviation`.
+  4. **Anycast-Lücke (dokumentiert, nicht gelöst):** `propagation_speed`
+     ist absolut/physikbasiert, nicht baseline-relativ — legitimes Anycast
+     (Cloudflare 1.1.1.1, Google 8.8.8.8, DNS-Root-Server) sieht für dieses
+     eine Signal strukturell wie ein Hijack aus. Der jetzt symmetrische
+     `spread_z_score` mildert das für Präfixe mit Baseline-Historie
+     deutlich, aber `propagation_speed` selbst bleibt ein bekanntes
+     Restrisiko. Echte Lösung ist ein eigenes Vorhaben (Anycast-Allowlist
+     o.ä.), kein Bugfix — siehe `TRUSTWAVE_ROADMAP.md` Abschnitt 3.1.
+  6 neue Tests (2× Cold-Start-Sharing, 2× symmetrischer Z-Score/Order-
+  Deviation, 1× Baseline-Order-Tracking bereits mit Fix 3 mitgeliefert).
+  Details siehe `TRUSTWAVE_ROADMAP.md` Phase 3.
 
 ---
 

@@ -469,12 +469,12 @@ impl DetectorRunner {
             confidence: score.total_score,
             detected_at: chrono::Utc::now(),
             details: format!(
-                "Wave anomaly ({:?}): spread_z={:.2} outlier={:.2} gap_ratio={:.2} order_entropy={:.2} speed={:.2}",
+                "Wave anomaly ({:?}): spread_z={:.2} outlier={:.2} gap_ratio={:.2} order_deviation={:.2} speed={:.2}",
                 score.classification,
                 score.signals.spread_z_score,
                 score.signals.outlier_factor,
                 score.signals.collector_gap_ratio,
-                score.signals.arrival_order_entropy,
+                score.signals.order_deviation,
                 score.signals.propagation_speed,
             ),
             tenant_id: "bgp".to_string(),
@@ -1006,6 +1006,7 @@ mod tests {
             p99_spread_ms: 60.0,
             max_spread_ms: 80.0,
             std_dev: 5.0,
+            expected_order: vec!["rrc00".to_string(), "rrc01".to_string()],
         }]);
 
         let tmp = tempfile::NamedTempFile::new().unwrap();
