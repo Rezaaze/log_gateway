@@ -100,3 +100,11 @@ subject = "bgp.events"
 dir = "/data/snapshots"
 # Number of days to keep snapshots (older files are deleted)
 retention_days = 7
+
+[wave]
+# Enable the wave-physics propagation anomaly detector (PropagationAggregator
+# + WaveAnomalyDetector). Safe to leave enabled without a baseline file —
+# it degrades to "no anomalies" until one is built via tools/baseline_builder.
+enabled = true
+# Path to the baseline file produced by tools/baseline_builder
+baseline_path = "data/baselines/baseline.bin.zst"

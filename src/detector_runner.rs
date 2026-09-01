@@ -12,12 +12,14 @@ Phase 3b-3d Implementation Plan:
 - Handle warmup period (first 7 days of learning)
 */
 
-use crate::anomaly_detector::{Detector, FlappingDetector, HijackDetector};
+use crate::anomaly_detector::{Anomaly, AnomalyType, Detector, FlappingDetector, HijackDetector};
 use crate::escalation::EscalationRouter;
 use crate::irr_cache::{IrrCache, IrrStatus};
 use crate::metrics_exporter::DetectorMetrics;
 use crate::nats_subscriber::BgpRecord;
+use crate::propagation::{PropagationAggregator, PropagationEvent};
 use crate::rpki_cache::{RpkiCache, RpkiStatus};
+use crate::wave_anomaly_detector::{AnomalyClassification, WaveAnomalyDetector};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -105,6 +107,12 @@ pub struct DetectorRunner {
     /// Escalation router — persists, deduplicates and sends webhook
     /// notifications for detected anomalies (optional)
     escalation_router: Option<Arc<EscalationRouter>>,
+    /// Aggregates per-collector arrivals into PropagationEvents for
+    /// wave-physics anomaly scoring
+    propagation_aggregator: Arc<PropagationAggregator>,
+    /// Wave anomaly detector — scores completed PropagationEvents against a
+    /// baseline (optional; without a baseline it never raises anomalies)
+    wave_detector: Option<Arc<WaveAnomalyDetector>>,
 }
 
 impl std::fmt::Debug for DetectorRunner {
@@ -140,6 +148,14 @@ impl std::fmt::Debug for DetectorRunner {
                     "None"
                 },
             )
+            .field(
+                "wave_detector",
+                &if self.wave_detector.is_some() {
+                    "Some(WaveAnomalyDetector)"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -162,6 +178,8 @@ impl DetectorRunner {
             rpki_cache: None,
             irr_cache: None,
             escalation_router: None,
+            propagation_aggregator: Arc::new(PropagationAggregator::new()),
+            wave_detector: None,
         }
     }
 
@@ -177,6 +195,8 @@ impl DetectorRunner {
             rpki_cache: None,
             irr_cache: None,
             escalation_router: None,
+            propagation_aggregator: Arc::new(PropagationAggregator::new()),
+            wave_detector: None,
         }
     }
 
@@ -192,6 +212,8 @@ impl DetectorRunner {
             rpki_cache: Some(rpki),
             irr_cache: Some(irr),
             escalation_router: None,
+            propagation_aggregator: Arc::new(PropagationAggregator::new()),
+            wave_detector: None,
         }
     }
 
@@ -200,6 +222,15 @@ impl DetectorRunner {
     /// anomalies are only logged and counted in Prometheus metrics.
     pub fn with_escalation(mut self, router: Arc<EscalationRouter>) -> Self {
         self.escalation_router = Some(router);
+        self
+    }
+
+    /// Attach a wave anomaly detector so completed PropagationEvents (built
+    /// from per-collector arrival timing) are scored against a baseline.
+    /// Without this, BGP records still feed the PropagationAggregator but
+    /// completed events are discarded unscored.
+    pub fn with_wave_detector(mut self, detector: Arc<WaveAnomalyDetector>) -> Self {
+        self.wave_detector = Some(detector);
         self
     }
 
@@ -386,7 +417,79 @@ impl DetectorRunner {
             }
         }
 
+        // Feed the wave-physics propagation aggregator (announcements only —
+        // arrival timing across collectors is only meaningful for the
+        // announcement of a route, not its withdrawal). If this record
+        // completes a propagation group's observation window, score it.
+        if record.event_type == "announce" {
+            if let Some(event) = self.propagation_aggregator.add(record) {
+                self.score_propagation_event(&event).await;
+            }
+        }
+
         Ok(())
+    }
+
+    /// Scores a completed PropagationEvent against the wave baseline and, if
+    /// anomalous, routes it through escalation the same way as hijack/flap
+    /// detections. A no-op if no wave detector is attached.
+    async fn score_propagation_event(&self, event: &PropagationEvent) {
+        let Some(wave_detector) = &self.wave_detector else {
+            return;
+        };
+        let score = wave_detector.score_event(event);
+        if score.classification == AnomalyClassification::Normal {
+            return;
+        }
+
+        self.anomalies_detected.fetch_add(1, Ordering::Relaxed);
+        self.metrics.record_anomaly("wave");
+
+        let anomaly = Anomaly {
+            id: uuid::Uuid::new_v4(),
+            anomaly_type: AnomalyType::PossibleHijack,
+            prefix: event.prefix.to_string(),
+            origin_as: event.origin_as,
+            confidence: score.total_score,
+            detected_at: chrono::Utc::now(),
+            details: format!(
+                "Wave anomaly ({:?}): spread_z={:.2} outlier={:.2} gap_ratio={:.2} order_entropy={:.2} speed={:.2}",
+                score.classification,
+                score.signals.spread_z_score,
+                score.signals.outlier_factor,
+                score.signals.collector_gap_ratio,
+                score.signals.arrival_order_entropy,
+                score.signals.propagation_speed,
+            ),
+            tenant_id: "bgp".to_string(),
+        };
+
+        tracing::warn!(
+            "Wave anomaly detected: prefix={}, origin_as={}, confidence={:.2}, classification={:?}",
+            anomaly.prefix,
+            anomaly.origin_as,
+            anomaly.confidence,
+            score.classification
+        );
+
+        if let Some(router) = &self.escalation_router {
+            router.route(&anomaly).await;
+        }
+    }
+
+    /// Flushes propagation groups whose observation window has expired
+    /// without a natural completion (e.g. a collector never reported an
+    /// arrival) and scores them. Call periodically (e.g. every 1–5s) from a
+    /// background task — otherwise slow-completing groups are only scored
+    /// when the next record for the same (prefix, origin_as, as_path) hash
+    /// happens to arrive.
+    pub async fn flush_propagation_events(&self) {
+        if self.wave_detector.is_none() {
+            return;
+        }
+        for event in self.propagation_aggregator.flush_expired() {
+            self.score_propagation_event(&event).await;
+        }
     }
 
     /// Convert BgpRecord to BgpClickHouseRecord format
@@ -832,6 +935,93 @@ mod tests {
         assert!(
             stats.anomalies_detected > 0,
             "hijack should still be counted even when escalation is attached"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_score_propagation_event_noop_without_wave_detector() {
+        use std::collections::BTreeMap;
+
+        // No wave detector attached — scoring must be a safe no-op.
+        let runner = DetectorRunner::new();
+        let mut arrivals = BTreeMap::new();
+        arrivals.insert("rrc00".to_string(), 1000.0);
+        arrivals.insert("rrc01".to_string(), 1000.5);
+        let event = PropagationEvent::new(
+            "8.8.8.0/24".parse().unwrap(),
+            15169,
+            vec![1103, 15169],
+            arrivals,
+        );
+
+        runner.score_propagation_event(&event).await;
+
+        assert_eq!(
+            runner.stats().anomalies_detected,
+            0,
+            "no wave detector attached — score_propagation_event must not count anomalies"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_score_propagation_event_routes_anomalous_wave_score() {
+        use crate::alert_manager::AlertManagerClient;
+        use crate::escalation::EscalationRouter;
+        use crate::metrics::GatewayMetrics;
+        use crate::wave_baseline::{WaveBaseline, WaveBaselineEntry};
+        use std::collections::BTreeMap;
+
+        let as_path = vec![1103u32, 15169u32];
+        let path_hash = as_path.iter().fold(0u64, |acc, &asn| {
+            acc.wrapping_mul(31).wrapping_add(asn as u64)
+        });
+
+        // Baseline expects a tight, ~20ms spread — far tighter than the
+        // 500ms spread the synthetic event below will report.
+        let mut baseline = WaveBaseline::new("test");
+        baseline.extend(vec![WaveBaselineEntry {
+            prefix: "8.8.8.0/24".to_string(),
+            origin_as: 15169,
+            as_path_hash: path_hash,
+            sample_count: 100,
+            min_spread_ms: 5.0,
+            p50_spread_ms: 20.0,
+            p95_spread_ms: 40.0,
+            p99_spread_ms: 60.0,
+            max_spread_ms: 80.0,
+            std_dev: 5.0,
+        }]);
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        baseline.save(tmp.path()).unwrap();
+
+        let wave_detector =
+            Arc::new(WaveAnomalyDetector::new(Some(tmp.path())).expect("baseline should load"));
+
+        let alert_manager = Arc::new(AlertManagerClient::new(
+            "http://dummy".to_string(),
+            "db".to_string(),
+        ));
+        let router = Arc::new(EscalationRouter::new(
+            alert_manager,
+            Arc::new(GatewayMetrics::new()),
+        ));
+
+        let runner = DetectorRunner::new()
+            .with_wave_detector(wave_detector)
+            .with_escalation(Arc::clone(&router));
+
+        // 500ms spread against a ~20ms±5ms baseline — well past p99 (60ms).
+        let mut arrivals = BTreeMap::new();
+        arrivals.insert("rrc00".to_string(), 1000.0);
+        arrivals.insert("rrc01".to_string(), 1000.5);
+        let event = PropagationEvent::new("8.8.8.0/24".parse().unwrap(), 15169, as_path, arrivals);
+
+        runner.score_propagation_event(&event).await;
+
+        assert!(
+            runner.stats().anomalies_detected > 0,
+            "spread far outside baseline should be classified as anomalous and counted"
         );
     }
 }

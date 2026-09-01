@@ -348,6 +348,35 @@ impl Default for SnapshotConfig {
     }
 }
 
+/// Configuration for the wave-physics propagation anomaly detector
+/// (`PropagationAggregator` + `WaveAnomalyDetector`). Safe to leave enabled
+/// even without a baseline file present — the detector degrades to
+/// "no anomalies" until a baseline is built via `tools/baseline_builder`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct WaveConfig {
+    #[serde(default = "default_wave_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_wave_baseline_path")]
+    pub baseline_path: String,
+}
+
+fn default_wave_enabled() -> bool {
+    true
+}
+
+fn default_wave_baseline_path() -> String {
+    "data/baselines/baseline.bin.zst".to_string()
+}
+
+impl Default for WaveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_wave_enabled(),
+            baseline_path: default_wave_baseline_path(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct GatewayConfig {
     pub server: ServerConfig,
@@ -381,6 +410,9 @@ pub struct GatewayConfig {
     /// Baseline model snapshot configuration
     #[serde(default)]
     pub snapshot: SnapshotConfig,
+    /// Wave-physics propagation anomaly detector configuration
+    #[serde(default)]
+    pub wave: WaveConfig,
 }
 
 impl GatewayConfig {

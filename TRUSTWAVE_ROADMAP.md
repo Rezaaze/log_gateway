@@ -195,7 +195,21 @@ werden über Kollektoren korrekt gruppiert. MRT-Archivdaten können eingelesen w
 ---
 
 ## Phase 2 — Wellenbaseline
-**Woche 4–8 | ✅ Erledigt — 08.03.2026 (`src/wave_baseline.rs`, `tools/baseline_builder/`, verifiziert 31.08.2026)**
+**Woche 4–8 | ⏳ Teilweise erledigt — `src/wave_baseline.rs` verifiziert 31.08.2026, `tools/baseline_builder/` kompiliert NICHT (Fund 01.09.2026, siehe unten)**
+
+> **Korrektur (01.09.2026):** Die Aussage "Phase 2 erledigt" vom 31.08.2026 war
+> falsch — sie beruhte auf `cargo build --lib`, das nur die Haupt-Crate prüft,
+> nicht den gesamten Workspace. `cargo check --workspace` zeigt: Abschnitt
+> 2.2.3 (`tools/baseline_builder/`) referenziert `wave_baseline::BaselineBuilder`
+> und `wave_baseline::save_baseline()` — **beide existieren nicht** in
+> `src/wave_baseline.rs` (dort gibt es nur `WaveBaseline::save/load`, JSON-
+> basiert, kein bincode+zstd wie in 2.3.1 vorgesehen, und keinen
+> Streaming-Accumulator mit diesem Namen). Der Baustein für einen Accumulator
+> existiert (`WaveStatsAccumulator`, Welford-Algorithmus für Mean/Std/Min/Max),
+> liefert aber keine Perzentile (p50/p95/p99), die `WaveBaselineEntry`
+> benötigt — ein Streaming-Perzentil-Schätzer (z.B. t-digest) fehlt noch als
+> Designentscheidung. `src/wave_baseline.rs` selbst (Datenstruktur + Persistenz
+> + 10 Tests) ist real und getestet — nur der Batch-Builder-CLI-Tool ist kaputt.
 
 ### Abschnitt 2.1 — Baseline-Datenstruktur
 

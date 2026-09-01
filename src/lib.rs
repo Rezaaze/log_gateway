@@ -404,6 +404,32 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
                  NATS stream will only be logged and counted, not persisted or sent to webhooks"
             );
         }
+
+        // Attach the wave-physics propagation anomaly detector. Loading a
+        // baseline is best-effort: without one (e.g. not yet built via
+        // tools/baseline_builder) the detector stays live but never raises
+        // anomalies, so this is safe to enable unconditionally.
+        if config.wave.enabled {
+            let baseline_path = std::path::Path::new(&config.wave.baseline_path);
+            match wave_anomaly_detector::WaveAnomalyDetector::new(Some(baseline_path)) {
+                Ok(wave_detector) => {
+                    tracing::info!(
+                        "DetectorRunner: wave anomaly detector attached (baseline_path: {})",
+                        config.wave.baseline_path
+                    );
+                    detector_runner_builder =
+                        detector_runner_builder.with_wave_detector(Arc::new(wave_detector));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Wave anomaly detector disabled — failed to load baseline from {}: {}",
+                        config.wave.baseline_path,
+                        e
+                    );
+                }
+            }
+        }
+
         let detector_runner = Arc::new(detector_runner_builder);
 
         // Clone for task
@@ -413,6 +439,19 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         tokio::spawn(async move {
             detector_runner_clone.run(detector_rx).await;
         });
+
+        // Periodically flush propagation groups whose window expired
+        // without a natural completion, so they still get scored.
+        if config.wave.enabled {
+            let detector_runner_for_flush = Arc::clone(&detector_runner);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                loop {
+                    interval.tick().await;
+                    detector_runner_for_flush.flush_propagation_events().await;
+                }
+            });
+        }
 
         // Start NATS subscriber if URL is configured
         if !config.nats.url.is_empty() {
