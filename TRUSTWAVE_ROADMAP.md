@@ -11,11 +11,11 @@
 
 | Phase | Titel | Zeitraum | Ziel | Status |
 |---|---|---|---|---|
-| 0 | IP-Schutz & Projekt-Reset | Woche 1 | Rechtlich absichern, Fokus setzen | ⏳ Teilweise erledigt |
-| 1 | Daten-Fundament | Woche 2–4 | Rohdaten korrekt erfassen | 🔲 Offen |
-| 2 | Wellenbaseline | Woche 4–8 | Normales Propagationsverhalten modellieren | 🔲 Offen |
-| 3 | Wave Anomaly Detector | Woche 8–12 | Hijacks durch Wellenabweichung erkennen | 🔲 Offen |
-| 4 | Trust Score Engine | Woche 12–16 | Alle Signale zu einem Score kombinieren | 🔲 Offen |
+| 0 | IP-Schutz & Projekt-Reset | Woche 1 | Rechtlich absichern, Fokus setzen | ⏳ Teilweise erledigt (menschliche Aktionen ausstehend) |
+| 1 | Daten-Fundament | Woche 2–4 | Rohdaten korrekt erfassen | ✅ Erledigt |
+| 2 | Wellenbaseline | Woche 4–8 | Normales Propagationsverhalten modellieren | ✅ Erledigt (01.09.2026: `tools/baseline_builder`-Build-Bruch behoben) |
+| 3 | Wave Anomaly Detector | Woche 8–12 | Hijacks durch Wellenabweichung erkennen | ⏳ 3.1 live; 3.2-Tooling gebaut + smoke-getestet; echte Fallstudien + 3.3 offen |
+| 4 | Trust Score Engine | Woche 12–16 | Alle Signale zu einem Score kombinieren | 🔲 Offen — wartet auf Entscheidungs-Gate nach 3.3 |
 | 5 | Echtzeit-System | Monat 4–6 | Live-Betrieb, Validierung | 🔲 Offen |
 | 6 | BGP-Speaker & Pilot | Monat 6–9 | Aktives Routing, erster Kunde | 🔲 Offen |
 | 7 | Produktreife | Monat 9–18 | Skalierung, Zertifizierungen | 🔲 Offen |
@@ -195,7 +195,27 @@ werden über Kollektoren korrekt gruppiert. MRT-Archivdaten können eingelesen w
 ---
 
 ## Phase 2 — Wellenbaseline
-**Woche 4–8 | Ziel: "Normales" Propagationsverhalten mathematisch beschreiben**
+**Woche 4–8 | ✅ Erledigt — 08.03.2026, Build-Bruch in `tools/baseline_builder/` gefunden und behoben am 01.09.2026**
+
+> **Verlauf:** Am 31.08.2026 wurde "Phase 2 erledigt" auf Basis von
+> `cargo build --lib` gemeldet — das prüft nur die Haupt-Crate, nicht den
+> gesamten Workspace. Am 01.09.2026 zeigte `cargo check --workspace`, dass
+> `tools/baseline_builder/` (Abschnitt 2.2.3) nicht kompilierte: es
+> referenzierte `wave_baseline::BaselineBuilder` und
+> `wave_baseline::save_baseline()`, die es in `src/wave_baseline.rs` nicht
+> gab (dort existierten nur `WaveBaseline::save/load`, JSON-basiert statt
+> bincode+zstd wie in 2.3.1 vorgesehen). Fix: `WaveBaseline::save()`/`load()`
+> nutzen jetzt bincode+zstd (Format-Konsistenz mit dem Live-Ladepfad in
+> `WaveAnomalyDetector::new()` ist kritisch — beide müssen dasselbe Format
+> lesen/schreiben); neuer `BaselineBuilder`-Accumulator (gruppiert nach
+> prefix/origin_as/as_path_hash, Mindest-Sample-Schwelle konfigurierbar,
+> Default 30 gemäß 2.1.4/2.2.2) nutzt den bereits vorhandenen, aber bis dahin
+> toten `percentile()`-Helper für echte p50/p95/p99 (keine Streaming-Approximation
+> nötig — die Rohwerte pro Gruppe werden bis zum `build()`-Aufruf gehalten,
+> für eine 3-Jahres-MRT-Batch-Verarbeitung mit begrenzter Gruppenzahl
+> vertretbar). 4 neue Tests. `cargo check --workspace` und
+> `cargo test --workspace --lib` jetzt sauber (269/270, bekanntes
+> Sandbox-Artefakt siehe `CLAUDE.md`).
 
 ### Abschnitt 2.1 — Baseline-Datenstruktur
 
@@ -254,46 +274,98 @@ statistisch verlässliche Propagations-Baseline aus historischen Daten.
 ---
 
 ## Phase 3 — Wave Anomaly Detector
-**Woche 8–12 | Ziel: BGP-Hijacks durch Wellenabweichung erkennen**
+**Woche 8–12 | ⏳ Abschnitt 3.1 erledigt (01.09.2026, live angebunden) — 3.2/3.3 offen**
+
+> **Verlauf:** Am 31.08.2026 wurden zwei konkurrierende Implementierungen der
+> Wellenphysik-Signale gefunden: `src/wave_detector.rs` (ältere Version mit
+> teils hartkodierten Platzhalter-Konstanten statt echter Baseline-Statistik,
+> mittlerweile entfernt) und `src/wave_anomaly_detector.rs` (nutzt echte
+> `z_score`/`p50`/`p99`-Baseline-Werte + Kollektor-Geodistanz). Am 01.09.2026
+> wurde Letztere an den Live-Pfad angebunden: `DetectorRunner` speist jetzt
+> jeden `announce`-Record in einen `PropagationAggregator`; abgeschlossene
+> `PropagationEvent`s werden vom `WaveAnomalyDetector` bewertet, anomale
+> Scores laufen über denselben `EscalationRouter` wie Hijack/Flapping. Ein
+> Hintergrund-Task flusht alle 2s Gruppen ohne natürlichen Abschluss. Neue
+> `[wave]`-Configsektion, standardmäßig aktiv, ungefährlich ohne Baseline.
+> Damit ist Abschnitt 3.1 technisch erledigt — die Tabelle unten wurde von
+> der ursprünglichen Spezifikation auf die tatsächliche Implementierung
+> umgestellt (siehe Hinweis darunter). **Abschnitt 3.2 (Backtesting-Tooling)
+> ist gebaut und gegen echte RIPE-Daten smoke-getestet — die drei konkreten
+> historischen Fallstudien und die dafür nötigen Wochen an Vor-Hijack-Daten
+> fehlen noch. Abschnitt 3.3 (Kalibrierung) ist komplett offen.** Das
+> Entscheidungs-Gate vor Phase 4 ist erst nach beiden erfüllt.
 
 ### Abschnitt 3.1 — Wave Score Berechnung
 
+> **Hinweis:** Diese Tabelle beschrieb ursprünglich eine Spezifikation
+> (`WaveScore` mit den Signalen spread/order/delta/path/region), die nie so
+> gebaut wurde. Die tatsächliche Implementierung in `src/wave_anomaly_detector.rs`
+> verfolgt denselben Ansatz mit einer statistisch fundierteren
+> Signal-Auswahl. Die Tabelle beschreibt jetzt den Code, nicht mehr die
+> ursprüngliche Spezifikation.
+
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 3.1.1 | `WaveAnomalyDetector` struct | `src/wave_detector.rs` | Nimmt PropagationEvent + Baseline, gibt Score 0.0–1.0 |
-| 3.1.2 | Signal 1: Spread-Anomalie | `src/wave_detector.rs` | `spread_ms < expected_min * 0.1` → gleichzeitig angekommen → Hijack |
-| 3.1.3 | Signal 2: Reihenfolge-Anomalie | `src/wave_detector.rs` | Erste 3 Kollektoren weichen von Baseline-Erwartung ab |
-| 3.1.4 | Signal 3: Paarweise Delta-Anomalie | `src/wave_detector.rs` | Z-Score: `(actual - mean) / std > 3σ` für ≥ 2 Kollektor-Paare |
-| 3.1.5 | Signal 4: AS_PATH-Verkürzung | `src/wave_detector.rs` | Pfad kürzer als Baseline-Durchschnitt → Angreifer steht "näher" |
-| 3.1.6 | Signal 5: Region-Inversion | `src/wave_detector.rs` | Ankündigung kommt zuerst von der geografisch falschen Seite |
-| 3.1.7 | Gewichtete Kombination → Wave Score | `src/wave_detector.rs` | Spread(0.30) + Order(0.25) + Delta(0.25) + Path(0.10) + Region(0.10) |
-| 3.1.8 | Fallback ohne Baseline | `src/wave_detector.rs` | Präfixe mit < 30 Samples → nur RPKI/IRR, Wave Score = None |
-| 3.1.9 | Unit-Tests für alle 5 Signale | `tests/wave_detector_test.rs` | Synthetische PropagationEvents mit bekanntem Ergebnis |
+| 3.1.1 | `WaveAnomalyDetector` struct | `src/wave_anomaly_detector.rs` | Nimmt `PropagationEvent` + `WaveBaseline`, gibt `AnomalyScore` (0.0–1.0) zurück |
+| 3.1.2 | Signal 1: Spread-Z-Score | `src/wave_anomaly_detector.rs` | `z_score(spread_ms, baseline.p50, baseline.std_dev) / 3.0`, geclampt auf [0,1] |
+| 3.1.3 | Signal 2: Ausreißer-Faktor | `src/wave_anomaly_detector.rs` | `spread_ms > baseline.p99` → 1.0, sonst 0.0 |
+| 3.1.4 | Signal 3: Kollektor-Lücken-Verhältnis | `src/wave_anomaly_detector.rs` | Anteil der Ankunfts-Paare mit > 4ms Lücke — viele gleichzeitige Ankünfte sind untypisch |
+| 3.1.5 | Signal 4: Ankunftsreihenfolge-Entropie | `src/wave_anomaly_detector.rs` | Verhältnis eindeutiger zu maximal möglichen Ankunftszeitpunkten |
+| 3.1.6 | Signal 5: Propagationsgeschwindigkeit | `src/wave_anomaly_detector.rs` | `spread_ms` relativ zur Lichtlaufzeit über die größte beobachtete Kollektor-Geodistanz (`collector_registry::distance_between_collectors`) |
+| 3.1.7 | Gewichtete Kombination → `AnomalyScore` | `src/wave_anomaly_detector.rs` | Default: Spread(0.40) + Outlier(0.30) + Gap(0.15) + Entropie(0.10) + Speed(0.05), konfigurierbar über `AnomalyDetectorConfig` |
+| 3.1.8 | Fallback ohne Baseline | `src/wave_anomaly_detector.rs` | Kein Baseline-Eintrag gefunden → `AnomalyScore::default()`, Klassifikation `Normal` |
+| 3.1.9 | Unit-Tests | `src/wave_anomaly_detector.rs` (inline `#[cfg(test)]`) | 5 Tests: z-Score, No-Baseline, Schwellenwerte, Gap-Ratio, Pfad-Hash-Konsistenz |
+| 3.1.10 | Live-Anbindung | `src/detector_runner.rs`, `src/lib.rs` | `PropagationAggregator` im NATS-Pfad, 2s-Flush-Task, `[wave]`-Config, Escalation-Routing — 2 zusätzliche Tests |
+
+`AnomalyClassification` ersetzt den ursprünglich geplanten reinen Float-Score
+mit drei Stufen: `Normal` (< 0.3), `Suspicious` (0.3–0.6), `Anomalous` (≥ 0.6).
+Nur `Suspicious`/`Anomalous` lösen im Live-Pfad eine Eskalation aus.
 
 ```rust
-pub struct WaveScore {
-    pub total:                f64,    // 0.0 = normal, 1.0 = sicher Hijack
-    pub spread_signal:        f64,
-    pub order_signal:         f64,
-    pub delta_signal:         f64,
-    pub path_signal:          f64,
-    pub region_signal:        f64,
-    pub baseline_confidence:  f64,   // Wie verlässlich ist die Baseline?
-    pub explanation:          String, // Human-readable Begründung für Alert
+pub struct AnomalyScore {
+    pub total_score:      f64,               // 0.0 = normal, 1.0 = sicher Hijack
+    pub signals:          Signals,
+    pub classification:   AnomalyClassification,
+}
+
+pub struct Signals {
+    pub spread_z_score:        f64,
+    pub outlier_factor:        f64,
+    pub collector_gap_ratio:   f64,
+    pub arrival_order_entropy: f64,
+    pub propagation_speed:     f64,
 }
 ```
 
 ---
 
 ### Abschnitt 3.2 — Backtesting Framework
+**⏳ Tooling erledigt (01.09.2026) — echte Fallstudien (3.2.1/3.2.2) noch offen**
+
+> 3.2.3–3.2.5 (die CLI selbst) sind gebaut und gegen echte RIPE-RIS-Archivdaten
+> smoke-getestet: `tools/backtest/` hat real heruntergeladene MRT-Dateien
+> (3 Kollektoren, 01.01.2024) korrekt geparst, daraus PropagationEvents gebaut
+> und einen Report erzeugt. Bewusst **nicht** hardcodiert: die konkreten
+> historischen Hijack-Parameter (exakte Präfixe/ASNs/Zeitfenster) für
+> MyEtherWallet 2018, Pakistan Telecom 2008, Rostelecom 2020 — diese aus dem
+> Gedächtnis zu raten wäre riskant falsch. Stattdessen liest die CLI eine
+> `case.toml` (Prefix, legitime/Hijacker-ASN, Zeitfenster, Pfade), die der
+> Bediener anhand einer Primärquelle befüllt (z.B. bgpstream.com,
+> RIPE-Incident-Writeups, NANOG-Mailingliste). **Fehlt noch:** 3.2.1 (die
+> drei `case.toml`-Dateien mit verifizierten echten Werten befüllen) und 3.2.2
+> (die zugehörigen MRT-Archive herunterladen — machbar, `data.ris.ripe.net`
+> ist erreichbar, aber für einen validen Backtest reicht das ±2h-Fenster
+> allein nicht: die Baseline braucht Wochen an Vor-Hijack-Daten pro Präfix,
+> um die ≥30-Sample-Schwelle zu erreichen — das ist der eigentlich große
+> Download, nicht die ±2h Hijack-Daten selbst).
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 3.2.1 | Bekannte Hijack-Events als Testfälle definieren | `tests/hijack_events.rs` | MyEtherWallet 24.04.2018, Pakistan Telecom 24.02.2008, Rostelecom 01.04.2020 |
-| 3.2.2 | MRT-Files für Hijack-Zeiträume herunterladen | `scripts/download_hijack_data.sh` | ± 2h um Hijack-Zeitpunkt, alle verfügbaren Kollektoren |
-| 3.2.3 | Backtesting-Runner CLI | `tools/backtest/` | Liest MRT, baut PropagationEvents, läuft durch Detektor |
-| 3.2.4 | Metriken: True Positive Rate, False Positive Rate, Erkennungs-Latenz | `tools/backtest/` | Wie viele Sekunden nach Hijack-Start → erste Erkennung? |
-| 3.2.5 | Training/Test-Split erzwingen | `tools/backtest/` | Baseline NUR aus Daten vor dem Hijack (kein Data Leakage) |
+| 3.2.1 | Bekannte Hijack-Events als Testfälle definieren | `tools/backtest/cases/*.toml` | MyEtherWallet 24.04.2018, Pakistan Telecom 24.02.2008, Rostelecom 01.04.2020 — Parameter noch einzutragen |
+| 3.2.2 | MRT-Files für Hijack-Zeiträume + Vor-Hijack-Baseline herunterladen | — | ± 2h um Hijack-Zeitpunkt für den Test; Wochen an Vorlauf für eine reliable Baseline (via `tools/baseline_builder`) |
+| 3.2.3 | Backtesting-Runner CLI | `tools/backtest/` | ✅ Liest MRT, baut PropagationEvents, läuft durch `WaveAnomalyDetector` — smoke-getestet gegen echte RIPE-Daten |
+| 3.2.4 | Metriken: True Positive Rate, False Positive Rate, Erkennungs-Latenz | `tools/backtest/` | ✅ Confusion-Matrix + Latenz zum ersten korrekt erkannten Event |
+| 3.2.5 | Training/Test-Split erzwingen | `tools/backtest/` | ✅ `WaveBaseline::data_cutoff_ts` (spätester Sample-Zeitstempel der Quelldaten, nicht Datei-Erstellzeit) muss vor `hijack_start` liegen, sonst bricht die CLI hart ab |
 
 ---
 

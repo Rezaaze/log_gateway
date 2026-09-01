@@ -25,7 +25,6 @@ pub mod collector_registry;
 pub mod config;
 pub mod cost_reporter;
 pub mod cost_tracker;
-pub mod detector_loop;
 pub mod detector_runner;
 pub mod escalation;
 pub mod handlers;
@@ -52,6 +51,7 @@ pub mod sink;
 pub mod telemetry;
 pub mod tenant_api;
 pub mod tenant_manager;
+pub mod wave_anomaly_detector;
 pub mod wave_baseline;
 pub mod webhook;
 
@@ -267,7 +267,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
     tokio::spawn(anomaly_detector::run_alert_logger(
         alert_rx,
         metrics_for_alerts,
-        escalation_router,
+        escalation_router.clone(),
         alert_manager_client.clone(),
         reload_rx,
         None, // tenant_id from context/header (None at startup)
@@ -382,7 +382,7 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
             tokio::sync::mpsc::channel::<crate::nats_subscriber::BgpRecord>(64000);
 
         // Create detector runner — with RPKI/IRR enrichment if both caches are available
-        let detector_runner = Arc::new(match (&rpki_cache, &irr_cache) {
+        let mut detector_runner_builder = match (&rpki_cache, &irr_cache) {
             (Some(rpki), Some(irr)) => {
                 tracing::info!("DetectorRunner: RPKI+IRR enrichment enabled");
                 detector_runner::DetectorRunner::with_enrichment(Arc::clone(rpki), Arc::clone(irr))
@@ -391,7 +391,45 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
                 tracing::warn!("DetectorRunner: running without RPKI/IRR enrichment (enable RPKI in config for higher-confidence detection)");
                 detector_runner::DetectorRunner::new()
             }
-        });
+        };
+        if let Some(ref router) = escalation_router {
+            tracing::info!(
+                "DetectorRunner: escalation router attached (persist + dedup + webhook)"
+            );
+            detector_runner_builder = detector_runner_builder.with_escalation(Arc::clone(router));
+        } else {
+            tracing::warn!(
+                "DetectorRunner: no escalation router available — detected anomalies from the \
+                 NATS stream will only be logged and counted, not persisted or sent to webhooks"
+            );
+        }
+
+        // Attach the wave-physics propagation anomaly detector. Loading a
+        // baseline is best-effort: without one (e.g. not yet built via
+        // tools/baseline_builder) the detector stays live but never raises
+        // anomalies, so this is safe to enable unconditionally.
+        if config.wave.enabled {
+            let baseline_path = std::path::Path::new(&config.wave.baseline_path);
+            match wave_anomaly_detector::WaveAnomalyDetector::new(Some(baseline_path)) {
+                Ok(wave_detector) => {
+                    tracing::info!(
+                        "DetectorRunner: wave anomaly detector attached (baseline_path: {})",
+                        config.wave.baseline_path
+                    );
+                    detector_runner_builder =
+                        detector_runner_builder.with_wave_detector(Arc::new(wave_detector));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Wave anomaly detector disabled — failed to load baseline from {}: {}",
+                        config.wave.baseline_path,
+                        e
+                    );
+                }
+            }
+        }
+
+        let detector_runner = Arc::new(detector_runner_builder);
 
         // Clone for task
         let detector_runner_clone = Arc::clone(&detector_runner);
@@ -400,6 +438,19 @@ pub async fn create_app(config: GatewayConfig) -> Result<Router> {
         tokio::spawn(async move {
             detector_runner_clone.run(detector_rx).await;
         });
+
+        // Periodically flush propagation groups whose window expired
+        // without a natural completion, so they still get scored.
+        if config.wave.enabled {
+            let detector_runner_for_flush = Arc::clone(&detector_runner);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                loop {
+                    interval.tick().await;
+                    detector_runner_for_flush.flush_propagation_events().await;
+                }
+            });
+        }
 
         // Start NATS subscriber if URL is configured
         if !config.nats.url.is_empty() {

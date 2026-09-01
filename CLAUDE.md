@@ -4,6 +4,96 @@ Dieses Dokument beschreibt das Projekt vollständig, damit Claude in einer neuen
 
 ---
 
+## ⚠️ Stand 31.08.2026 — dieses Dokument ist ein historischer Snapshot
+
+Alles unten beschreibt den Zustand des reinen "Log Gateway" (105/105 Tests,
+Milestones M1–M16, P1–P6). **Seit 08.03.2026 ist das Projekt zu "BGP
+TrustWave" gewachsen** (Wellenphysik-Triangulation, Trust-Score-Engine,
+RPKI/IRR-Validierung, NATS/ClickHouse-Streaming, ~44 Module in `src/`).
+Maßgeblich für den aktuellen Stand ist **`TRUSTWAVE_ROADMAP.md`**, nicht
+mehr primär dieses Dokument. `DEV_ROADMAP.md` ist ein verworfener
+Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
+
+**Verifiziert am 31.08.2026 (Session-Audit), zuletzt aktualisiert 01.09.2026:**
+- Build/Tests laufen sauber: 267/268 Lib-Tests grün (1 Fehlschlag ist ein
+  reines Sandbox-Artefakt: Test erwartet einen Permission-Fehler beim
+  Schreiben nach `/root/...`, läuft dort aber als root). `cargo check
+  --workspace` (alle Workspace-Member, nicht nur die Haupt-Crate) ist
+  ebenfalls sauber.
+  `cargo build`/`test` scheitern in dieser Remote-Sandbox NUR am
+  Swagger-UI-Download in `utoipa-swagger-ui`'s build.rs (Netzwerk-Policy
+  blockiert `github.com`-Archiv-Downloads, kein Code-Fehler) — Workaround:
+  `SWAGGER_UI_DOWNLOAD_URL=file:///pfad/zu/vorgebautem-swagger-ui.zip`
+  (siehe `build.rs` der Dependency; nicht in Git committed, nur lokaler
+  Sandbox-Workaround).
+- **Kritischer Fund + Fix:** Die live NATS-Pipeline (`detector_runner.rs`,
+  gespeist aus dem NATS-Subscriber) erkannte Hijacks/Flapping korrekt, hat
+  sie aber nie an `EscalationRouter` weitergereicht — erkannte Anomalien
+  landeten nur in Tracing-Logs + Prometheus-Zählern, nie in ClickHouse
+  `alert_history` und nie per Webhook/Slack. Der parallele HTTP-Ingest-Pfad
+  (`rpki_tx` → `anomaly_detector::AnomalyDetector` → `run_alert_logger`)
+  hatte Escalation korrekt verdrahtet — die beiden Pfade hatten
+  unterschiedlich vollständige Detector-Instanzen. Fix: `DetectorRunner`
+  bekommt jetzt per `.with_escalation(router)` denselben `EscalationRouter`
+  wie der HTTP-Pfad; alle drei Erkennungsstellen in `process_record()`
+  rufen `router.route(&anomaly)` auf. Neuer Regressionstest:
+  `test_escalation_router_invoked_on_hijack_without_panicking`.
+- **Toter Code bereinigt:** `src/wave_detector.rs` (ältere, nie
+  `mod`-deklarierte Wave-Score-Implementierung mit hartkodierten
+  Platzhalter-Konstanten statt echter Baseline-Statistik) wurde entfernt —
+  ersetzt durch die neuere `src/wave_anomaly_detector.rs` (nutzt echten
+  `z_score`, `p50`/`p99`-Baseline-Werte, Kollektor-Geodistanz), die jetzt
+  als `pub mod` Teil der Crate ist (kompiliert, 5 Tests laufen in CI).
+- **Update 01.09.2026 — Phase 3 (Wave Anomaly Detector) an Live-Pfad
+  angebunden:** `DetectorRunner` speist jetzt jeden `announce`-Record in
+  einen `PropagationAggregator`; abgeschlossene `PropagationEvent`s werden
+  vom `WaveAnomalyDetector` bewertet, anomale Scores laufen über denselben
+  `EscalationRouter` wie Hijack/Flapping. Ein Hintergrund-Task flusht alle
+  2s Gruppen, deren Fenster ohne natürlichen Abschluss abgelaufen ist. Neue
+  `[wave]`-Configsektion (`enabled`, `baseline_path`), standardmäßig aktiv
+  und ungefährlich ohne vorhandene Baseline-Datei (Detector degradiert dann
+  zu "keine Anomalien"). 2 neue Tests.
+- **Update 01.09.2026 — `tools/baseline_builder/` repariert:** Beim Verifizieren
+  mit `cargo check --workspace` (nicht nur `--lib`) stellte sich heraus, dass
+  `tools/baseline_builder` gar nicht kompilierte — es referenzierte
+  `wave_baseline::BaselineBuilder`/`save_baseline()`, die nicht existierten.
+  Fix: `WaveBaseline::save()`/`load()` nutzen jetzt bincode+zstd statt JSON
+  (Format-Konsistenz mit dem Live-Ladepfad ist kritisch); neuer
+  `BaselineBuilder`-Accumulator nutzt den bereits vorhandenen, aber toten
+  `percentile()`-Helper für echte p50/p95/p99. 4 neue Tests. Details siehe
+  `TRUSTWAVE_ROADMAP.md` Phase 2.
+- **Update 01.09.2026 — `src/detector_loop.rs` entfernt:** war eine zweite,
+  vollständige Pipeline-Implementierung (eigene NATS-Subscription,
+  RPKI→IRR→Hijack→Flapping→Dedup→Webhook), nirgends gespawnt. Durch den
+  Escalation-Fix ist `detector_runner.rs` jetzt funktional gleichwertig
+  (RPKI/IRR + Wave + Dedup/Webhook über `EscalationRouter`) und damit strikt
+  überlegen. Entfernt inkl. `tests/e2e_detection_test.rs` und
+  `examples/detector_loop_example.rs` — die zugrundeliegende Detection-Logik
+  (`HijackDetector`, `FlappingDetector`, `DedupCache`) bleibt über eigene
+  Modultests und `detector_runner.rs`s Testsuite abgedeckt.
+- **Update 01.09.2026 — `tools/backtest/` gebaut (Abschnitt 3.2):** neues
+  Workspace-Member, liest MRT-Archivdaten für ein per `case.toml` beschriebenes
+  Hijack-Fenster, baut `PropagationEvent`s, bewertet sie mit
+  `WaveAnomalyDetector`, berechnet TPR/FPR/Erkennungslatenz. Bewusst **keine**
+  historischen Hijack-Parameter (Präfixe/ASNs/Zeitfenster) im Code
+  hartkodiert — falsch aus dem Gedächtnis rekonstruiert wären sie ein reales
+  Risiko; der Bediener befüllt eine `case.toml` anhand einer Primärquelle.
+  Smoke-getestet gegen echte, frisch heruntergeladene RIPE-RIS-Archivdaten
+  (3 Kollektoren, 01.01.2024, ~36MB): 859k reale BGP-Records geparst, 1837
+  echte PropagationEvents gebaut, Report korrekt erzeugt. Dabei einen echten
+  Bug im Leakage-Check gefunden und gefixt: `WaveBaseline::created_at` ist
+  die Datei-Schreibzeit (heute), nicht das Alter der Quelldaten — für
+  historisches Backtesting immer falsch. Neues Feld `data_cutoff_ts`
+  (spätester Sample-Zeitstempel der Quelldaten, von `BaselineBuilder`
+  getrackt) ersetzt `created_at` im Leakage-Check. 2 neue Tests. **Noch
+  offen:** die drei konkreten Fallstudien (MyEtherWallet 2018, Pakistan
+  Telecom 2008, Rostelecom 2020) mit verifizierten echten Parametern +
+  mehrwöchige Vor-Hijack-Baseline-Daten — das ist der eigentlich große
+  Download, nicht die ±2h Hijack-Daten. Details siehe `TRUSTWAVE_ROADMAP.md`
+  Abschnitt 3.2.
+
+---
+
 ## Projektübersicht
 
 **Zweck:** Production-grade Rust Log Processing Gateway als Ersatz für ineffiziente Python Log-Infrastruktur.

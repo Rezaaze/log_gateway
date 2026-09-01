@@ -1,0 +1,20 @@
+[package]
+name    = "backtest"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "backtest"
+path = "src/main.rs"
+
+[dependencies]
+log-gateway         = { path = "../.." }
+bgpkit-parser       = "0.10"
+serde               = { version = "1", features = ["derive"] }
+toml                = "0.8"
+clap                = { version = "4", features = ["derive"] }
+chrono              = "0.4"
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+anyhow              = "1"
+walkdir             = "2"
