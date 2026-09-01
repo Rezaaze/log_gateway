@@ -436,15 +436,77 @@ Entscheidungs-Gate unten ausgelöst, Ursache identifiziert, siehe Verlauf**
 > vom Vortag, nur in einer Variante, die durch Warmup allein nicht behebbar
 > ist (das Präfix existierte vorher schlicht nicht).
 >
-> **Fazit:** Erste echte, verifizierte End-to-End-Erkenntnis — nicht die
-> erhoffte "Wave Physics erkennt echten Hijack", sondern eine ehrliche,
-> zweigeteilte: die einfache Origin-Heuristik hätte in diesem einen Fall
-> (mit Vorbehalt) einen Alert ausgelöst, die aufwendigere Wave-Physics-Ebene
-> strukturell nicht, plus ein neu gefundener und gefixter Tooling-Bug. Bevor
-> Phase 4 in Angriff genommen wird, muss (a) das Baseline-Lookup-Design
-> überarbeitet und der Test wiederholt werden, und (b) MyEtherWallet 2018
-> als zweiter, unabhängiger Datenpunkt real durchgeführt werden — ein
-> einzelner Fall beweist nichts.
+> **Fazit (Stand vor dem Baseline-Lookup-Fix):** Erste echte, verifizierte
+> End-to-End-Erkenntnis — nicht die erhoffte "Wave Physics erkennt echten
+> Hijack", sondern eine ehrliche, zweigeteilte: die einfache Origin-
+> Heuristik hätte in diesem einen Fall (mit Vorbehalt) einen Alert
+> ausgelöst, die aufwendigere Wave-Physics-Ebene strukturell nicht, plus ein
+> neu gefundener und gefixter Tooling-Bug.
+>
+> **Update 01.09.2026 — Baseline-Lookup repariert (Commit `3d89507`), echt
+> gegen dieselben Daten erneut getestet — TPR bleibt 0%, aber aus einem
+> ANDEREN, tieferen Grund:** `WaveAnomalyDetector::find_reference_entry`
+> unterstützt jetzt vier Tiers statt nur exaktem Match: (1) exakt, (2)
+> gleicher Origin/anderer Pfad, (3) **`origin_novelty`** — anderer Origin,
+> aber Baseline-Historie für exakt dieses Präfix vorhanden, (4)
+> **`deaggregation_mismatch`** — kein Eintrag für das exakte Präfix, aber
+> ein umfassendes Aggregat in der Baseline (per `IpNet::supernet()`-Walk,
+> Floor /8 v4 / /19 v6) unter einem ANDEREN Origin. Tier 4 ist genau für
+> Pakistan Telecom gebaut (De-Aggregation eines bereits gerouteten /22) und
+> in einem synthetischen Unit-Test mit exakt diesem Szenario (208.65.153.0/24
+> aus 208.65.152.0/22, Origin 36561→17557) verifiziert korrekt — 6 neue
+> Tests, alle grün.
+>
+> Echter Re-Test gegen dieselbe 60.127-Eintrag-Baseline: **FPR verbessert
+> sich 33,3% → 25,6%**, TPR bleibt aber bei 0,0%. Ursache per neuem
+> Diagnose-Tool (`tools/baseline_builder/examples/check_origin_visibility.rs`,
+> committed) direkt verifiziert: AS36561 hatte im Baseline-Zeitraum
+> tatsächlich 971 echte ANNOUNCE-Records über 11 Kollektoren (inkl. des
+> echten 208.65.152.0/22) — die Adresse war also durchaus sichtbar. Aber
+> **kein einziger Baseline-Eintrag existiert für dieses Adressgebiet, auf
+> KEINER Präfixlänge** — verifiziert per direktem Scan aller 60.127
+> Einträge. Hypothese: die 971 Records reichten nicht, um `min_samples=30`
+> zu erreichen. Test: Baseline neu gebaut mit `--min-samples 3` (dieselben
+> Rohdaten, kein neuer Download) → 169.069 statt 60.127 Einträge,
+> "Events ohne Baseline-Coverage" fällt von 17.584 auf 1.527 — aber für
+> 208.65.152.0/22 (Origin 36561) **immer noch null Einträge, auf jeder
+> Präfixlänge**, und TPR bleibt 0,0% (FPR sogar leicht schlechter, 35,8%,
+> vermutlich durch verrauschtere Stats aus sehr kleinen Samples).
+>
+> **Tieferer Befund:** Das ist kein Kalibrierungsproblem (min_samples
+> niedriger setzen half nachweislich nicht), sondern ein methodisches: Ein
+> `PropagationEvent` entsteht nur, wenn ≥3 verschiedene Kollektoren dieselbe
+> (Präfix, Origin)-Gruppe **im selben 5-Minuten-Zeitslot** per ANNOUNCE
+> sehen (`build_events`/`is_good_route`, sowohl in `baseline_builder` als
+> auch `backtest`). Ein stabiler, selten neu announcierter Prefix wie
+> YouTubes /22 erzeugt praktisch NIE ein solches synchrones Multi-Kollektor-
+> Announce-Ereignis im ruhigen Normalbetrieb — 971 Records über eine Woche
+> auf 11 Kollektoren verteilt (≈1 Record pro Kollektor alle 2h) sind zu
+> spärlich und zu unabhängig-zufällig verteilt, um je 3+ Kollektoren
+> gleichzeitig zu treffen. Die aktuelle Baseline-Methodik (nur `updates.*.gz`
+> Delta-Announces, nie `bview`/RIB-Table-Dumps) kann für exakt die
+> stabilsten, etabliertesten — und damit am meisten schützenswerten —
+> Präfixe strukturell KEINE Baseline aufbauen, unabhängig von Fenstergröße
+> oder `min_samples`. Das ist eine andere, tiefere Baustelle als die heute
+> gefixten Lookup-Tiers (die nachweislich korrekt funktionieren, sobald ein
+> Baseline-Eintrag existiert) — vermutlich lösbar nur durch Einbeziehen von
+> RIB-Table-Dump-Snapshots in den Baseline-Builder (neue Datenquelle, kein
+> kleiner Fix) oder eine grundsätzlich andere Definition einer "Baseline"
+> für Prefixe ohne beobachtete Announce-Wellen. Noch nicht begonnen.
+>
+> **Gesamtfazit nach diesem Durchgang:** Die Scoring-Logik-Fixes von heute
+> sind real, getestet und korrekt — sie greifen aber nicht, weil die
+> zugrundeliegende Baseline für genau diese Art von Präfix strukturell leer
+> bleibt. Für Pakistan Telecom 2008 konkret bleibt es dabei: die einfache
+> `HijackDetector`-Ebene hätte (mit dem dokumentierten Cold-Start-Vorbehalt)
+> ausgelöst, die Wave-Physics-Ebene nicht — nicht weil ihre Erkennungslogik
+> falsch wäre, sondern weil ihr die Trainingsdaten für dieses Präfix fehlen.
+> Bevor Phase 4 in Angriff genommen wird: (a) RIB-Dump-basierte
+> Baseline-Erweiterung als eigenes, größeres Vorhaben bewerten, und (b)
+> MyEtherWallet 2018 als zweiten unabhängigen Datenpunkt real durchführen —
+> ein einzelner Fall beweist nichts, und dieser eine Fall hat sich als
+> ungewöhnlich hart herausgestellt (De-Aggregation UND spärliche
+> Baseline-Daten kombiniert).
 
 | # | Task | Datei | Details |
 |---|---|---|---|

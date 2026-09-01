@@ -151,6 +151,33 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
   Cold-Start-Mehrdeutigkeit wie oben Fund #1, nur nicht durch Warmup lösbar.
   Details, volle Zahlen und nächste Schritte siehe `TRUSTWAVE_ROADMAP.md`
   Abschnitt 3.2.
+- **Update 01.09.2026 — Baseline-Lookup-Fix implementiert + committed
+  (`3d89507`), echt re-getestet — TPR bleibt 0%, aber jetzt aus einem
+  verifizierten, tieferen Grund:** `WaveAnomalyDetector` unterstützt jetzt
+  4 Lookup-Tiers statt nur exaktem `(prefix,origin,path)`-Match, inkl.
+  neuer `origin_novelty`- und `deaggregation_mismatch`-Signale (Tier 4:
+  Covering-Aggregat-Suche per `IpNet::supernet()`-Walk — exakt für den
+  Pakistan-Telecom-Fall gebaut). 6 neue Unit-Tests, alle grün, inkl. einer
+  synthetischen Reproduktion des exakten Incidents (208.65.153.0/24 aus
+  208.65.152.0/22, Origin 36561→17557) — verifiziert korrekt. Echter
+  Re-Test: FPR 33,3%→25,6% verbessert, TPR bleibt 0,0%. Root-Cause per
+  neuem Tool (`check_origin_visibility.rs`, committed) direkt verifiziert:
+  YouTubes AS36561 war im Baseline-Zeitraum sichtbar (971 echte Records,
+  11 Kollektoren, inkl. des echten /22) — aber KEIN Baseline-Eintrag
+  existiert für dieses Adressgebiet auf irgendeiner Präfixlänge. Test mit
+  `--min-samples 3` (statt 30, dieselben Rohdaten): 169.069 statt 60.127
+  Einträge, aber für dieses spezifische Adressgebiet immer noch NULL
+  Einträge — kein Kalibrierungsproblem. Tieferer, methodischer Befund: ein
+  `PropagationEvent` braucht ≥3 Kollektoren, die dieselbe Route im selben
+  5-Minuten-Zeitslot per ANNOUNCE sehen — ein stabiler, selten neu
+  announcierter Prefix wie YouTubes /22 erzeugt das im Normalbetrieb fast
+  nie (971 Records/Woche/11 Kollektoren ≈ 1 alle 2h pro Kollektor, zu
+  spärlich für synchrone Multi-Kollektor-Treffer). Die aktuelle
+  Announce-Delta-only-Methodik (nie RIB-Table-Dumps) kann für genau die
+  stabilsten, wichtigsten Präfixe strukturell keine Baseline aufbauen —
+  eine andere, tiefere Baustelle als die heute gefixte Scoring-Logik
+  (nachweislich korrekt, sobald ein Baseline-Eintrag existiert). Details
+  siehe `TRUSTWAVE_ROADMAP.md` Abschnitt 3.2.
 
 ---
 
