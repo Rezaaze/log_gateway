@@ -25,7 +25,6 @@ pub mod collector_registry;
 pub mod config;
 pub mod cost_reporter;
 pub mod cost_tracker;
-pub mod detector_loop;
 pub mod detector_runner;
 pub mod escalation;
 pub mod handlers;

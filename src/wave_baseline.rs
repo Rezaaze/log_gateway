@@ -114,7 +114,18 @@ pub struct WaveBaselineEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaveBaseline {
     pub version: String,
+    /// Wall-clock time this baseline was built/saved — NOT the age of its
+    /// underlying data. A baseline built today from a 2018 MRT archive has
+    /// `created_at` = today. Use `data_cutoff_ts` for anything that needs
+    /// to know how recent the underlying observations are (e.g. backtest
+    /// leakage checks).
     pub created_at: f64,
+    /// Latest observed sample timestamp (unix seconds) across all source
+    /// `PropagationEvent`s this baseline was built from. `0.0` means
+    /// unknown — either the baseline predates this field, or it was
+    /// constructed by hand rather than via `BaselineBuilder`.
+    #[serde(default)]
+    pub data_cutoff_ts: f64,
     pub description: String,
     pub entries: Vec<WaveBaselineEntry>,
 }
@@ -127,6 +138,7 @@ impl WaveBaseline {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_secs_f64(),
+            data_cutoff_ts: 0.0,
             description: description.to_string(),
             entries: Vec::new(),
         }
@@ -204,6 +216,9 @@ fn path_hash(as_path: &[u32]) -> u64 {
 pub struct BaselineBuilder {
     samples: std::collections::HashMap<(String, u32, u64), Vec<f64>>,
     min_samples: usize,
+    /// Latest `last_arrival` seen across all fed events — becomes the
+    /// resulting baseline's `data_cutoff_ts`.
+    max_observed_ts: f64,
 }
 
 impl Default for BaselineBuilder {
@@ -217,6 +232,7 @@ impl BaselineBuilder {
         Self {
             samples: std::collections::HashMap::new(),
             min_samples: 30,
+            max_observed_ts: 0.0,
         }
     }
 
@@ -236,6 +252,9 @@ impl BaselineBuilder {
             path_hash(&event.as_path),
         );
         self.samples.entry(key).or_default().push(event.spread_ms);
+        if event.last_arrival > self.max_observed_ts {
+            self.max_observed_ts = event.last_arrival;
+        }
     }
 
     /// Number of distinct (prefix, origin_as, as_path) groups observed so
@@ -249,6 +268,7 @@ impl BaselineBuilder {
     /// to be a reliable baseline for wave-score comparison.
     pub fn build(&self) -> WaveBaseline {
         let mut baseline = WaveBaseline::new("Built via tools/baseline_builder from MRT archive");
+        baseline.data_cutoff_ts = self.max_observed_ts;
         let entries: Vec<WaveBaselineEntry> = self
             .samples
             .iter()
@@ -488,5 +508,32 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded.entries[0].prefix, "8.8.8.0/24");
         let _ = std::fs::remove_file(temp_path);
+    }
+
+    #[test]
+    fn test_baseline_builder_tracks_data_cutoff_ts() {
+        // make_event() anchors arrivals at base_time=1000.0 and offsets the
+        // second collector by spread_ms/1000 seconds, so last_arrival grows
+        // with spread_ms — data_cutoff_ts must track the maximum across all
+        // fed events, not just the last one added.
+        let mut builder = BaselineBuilder::new().with_min_samples(1);
+        builder.add_event(&make_event("8.8.8.0/24", 15169, vec![1103, 15169], 10.0));
+        builder.add_event(&make_event("8.8.8.0/24", 15169, vec![1103, 15169], 500.0));
+        builder.add_event(&make_event("8.8.8.0/24", 15169, vec![1103, 15169], 100.0));
+        let baseline = builder.build();
+        assert!(
+            (baseline.data_cutoff_ts - 1000.5).abs() < 0.001,
+            "expected cutoff to track the 500ms-spread event's last_arrival (1000.5), got {}",
+            baseline.data_cutoff_ts
+        );
+    }
+
+    #[test]
+    fn test_new_baseline_has_zero_data_cutoff() {
+        // A hand-built baseline (not via BaselineBuilder) has no way to know
+        // its data's real time range — callers must treat 0.0 as "unknown",
+        // not "epoch 1970".
+        let baseline = WaveBaseline::new("hand-built");
+        assert_eq!(baseline.data_cutoff_ts, 0.0);
     }
 }

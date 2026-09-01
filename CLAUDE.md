@@ -15,7 +15,7 @@ mehr primär dieses Dokument. `DEV_ROADMAP.md` ist ein verworfener
 Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
 
 **Verifiziert am 31.08.2026 (Session-Audit), zuletzt aktualisiert 01.09.2026:**
-- Build/Tests laufen sauber: 269/270 Lib-Tests grün (1 Fehlschlag ist ein
+- Build/Tests laufen sauber: 267/268 Lib-Tests grün (1 Fehlschlag ist ein
   reines Sandbox-Artefakt: Test erwartet einen Permission-Fehler beim
   Schreiben nach `/root/...`, läuft dort aber als root). `cargo check
   --workspace` (alle Workspace-Member, nicht nur die Haupt-Crate) ist
@@ -62,15 +62,35 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
   `BaselineBuilder`-Accumulator nutzt den bereits vorhandenen, aber toten
   `percentile()`-Helper für echte p50/p95/p99. 4 neue Tests. Details siehe
   `TRUSTWAVE_ROADMAP.md` Phase 2.
-- **Nicht angefasst, aber auffällig:** `src/detector_loop.rs` ist eine
-  zweite, vollständige Pipeline-Implementierung (eigene NATS-Subscription,
-  RPKI→IRR→Hijack→Flapping→Dedup→Webhook) mit eigener Testabdeckung
-  (`tests/e2e_detection_test.rs`), aber **nirgends in `main.rs`/`lib.rs`
-  gespawnt** — sie ist also nicht tot (Tests laufen), aber redundant zur
-  jetzt reparierten `detector_runner.rs`. Bewusst nicht gelöscht, da echte
-  Testabdeckung dranhängt; sollte aber als Duplikat behandelt und irgendwann
-  entweder entfernt oder bewusst zur kanonischen Implementierung gemacht
-  werden.
+- **Update 01.09.2026 — `src/detector_loop.rs` entfernt:** war eine zweite,
+  vollständige Pipeline-Implementierung (eigene NATS-Subscription,
+  RPKI→IRR→Hijack→Flapping→Dedup→Webhook), nirgends gespawnt. Durch den
+  Escalation-Fix ist `detector_runner.rs` jetzt funktional gleichwertig
+  (RPKI/IRR + Wave + Dedup/Webhook über `EscalationRouter`) und damit strikt
+  überlegen. Entfernt inkl. `tests/e2e_detection_test.rs` und
+  `examples/detector_loop_example.rs` — die zugrundeliegende Detection-Logik
+  (`HijackDetector`, `FlappingDetector`, `DedupCache`) bleibt über eigene
+  Modultests und `detector_runner.rs`s Testsuite abgedeckt.
+- **Update 01.09.2026 — `tools/backtest/` gebaut (Abschnitt 3.2):** neues
+  Workspace-Member, liest MRT-Archivdaten für ein per `case.toml` beschriebenes
+  Hijack-Fenster, baut `PropagationEvent`s, bewertet sie mit
+  `WaveAnomalyDetector`, berechnet TPR/FPR/Erkennungslatenz. Bewusst **keine**
+  historischen Hijack-Parameter (Präfixe/ASNs/Zeitfenster) im Code
+  hartkodiert — falsch aus dem Gedächtnis rekonstruiert wären sie ein reales
+  Risiko; der Bediener befüllt eine `case.toml` anhand einer Primärquelle.
+  Smoke-getestet gegen echte, frisch heruntergeladene RIPE-RIS-Archivdaten
+  (3 Kollektoren, 01.01.2024, ~36MB): 859k reale BGP-Records geparst, 1837
+  echte PropagationEvents gebaut, Report korrekt erzeugt. Dabei einen echten
+  Bug im Leakage-Check gefunden und gefixt: `WaveBaseline::created_at` ist
+  die Datei-Schreibzeit (heute), nicht das Alter der Quelldaten — für
+  historisches Backtesting immer falsch. Neues Feld `data_cutoff_ts`
+  (spätester Sample-Zeitstempel der Quelldaten, von `BaselineBuilder`
+  getrackt) ersetzt `created_at` im Leakage-Check. 2 neue Tests. **Noch
+  offen:** die drei konkreten Fallstudien (MyEtherWallet 2018, Pakistan
+  Telecom 2008, Rostelecom 2020) mit verifizierten echten Parametern +
+  mehrwöchige Vor-Hijack-Baseline-Daten — das ist der eigentlich große
+  Download, nicht die ±2h Hijack-Daten. Details siehe `TRUSTWAVE_ROADMAP.md`
+  Abschnitt 3.2.
 
 ---
 

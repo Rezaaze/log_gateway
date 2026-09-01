@@ -4,6 +4,7 @@ members = [
     "tools/bgp_stream",
     "tools/mrt_replay",
     "tools/baseline_builder",
+    "tools/backtest",
 ]
 resolver = "2"
 
