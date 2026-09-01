@@ -273,8 +273,21 @@ fn main() -> Result<()> {
     let detector = WaveAnomalyDetector::new(Some(&case.baseline_path))
         .map_err(|e| anyhow::anyhow!("failed to load detector baseline: {}", e))?;
 
-    // --- Read MRT archive data for the incident window -----------------
-    let mut all_records = Vec::new();
+    // --- Read MRT archive data for the incident window, grouped by
+    // time-slot (same MRT update filename shared across collectors, e.g.
+    // "updates.20080224.1845.gz") ---------------------------------------
+    //
+    // Critical: PropagationEvents MUST be built per-slot, not by pooling
+    // every file in mrt_data_dir into one flat group-by. Grouping by
+    // (prefix, origin_as, path_hash) across a multi-hour window means a
+    // route that reappears in several periodic update dumps gets its
+    // "first arrival per collector" computed across the WHOLE window —
+    // producing spread_ms values of minutes to hours instead of the
+    // genuine sub-10-second propagation delay a PropagationEvent is meant
+    // to capture. tools/baseline_builder already gets this right (it
+    // slots by filename before grouping); this mirrors that exactly so
+    // both sides of the comparison use the same "spread" definition.
+    let mut slots: HashMap<String, Vec<(String, PathBuf)>> = HashMap::new();
     for entry in WalkDir::new(&case.mrt_data_dir)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -299,18 +312,34 @@ fn main() -> Result<()> {
         if !collector.starts_with("rrc") {
             continue;
         }
-        all_records.extend(parse_mrt_file(path, &collector));
+        slots
+            .entry(filename)
+            .or_default()
+            .push((collector, path.to_path_buf()));
     }
 
-    if all_records.is_empty() {
+    if slots.is_empty() {
         bail!(
             "no MRT records found under {:?} — expected data/mrt/rrcXX/.../updates.*.gz layout",
             case.mrt_data_dir
         );
     }
-    eprintln!("Parsed {} raw BGP records", all_records.len());
 
-    let events = build_events(all_records, args.min_collectors);
+    let mut total_records = 0usize;
+    let mut events = Vec::new();
+    for files in slots.values() {
+        let slot_records: Vec<MrtRecord> = files
+            .iter()
+            .flat_map(|(collector, path)| parse_mrt_file(path, collector))
+            .collect();
+        total_records += slot_records.len();
+        events.extend(build_events(slot_records, args.min_collectors));
+    }
+    eprintln!(
+        "Parsed {} raw BGP records across {} slots",
+        total_records,
+        slots.len()
+    );
     eprintln!(
         "Built {} PropagationEvents (>= {} collectors each)",
         events.len(),
