@@ -234,6 +234,22 @@ impl DetectorRunner {
         self
     }
 
+    /// Replaces the default, empty `HijackDetector` with a shared, already
+    /// (possibly) warmed-up instance — e.g. the one `AnomalyDetector` (the
+    /// HTTP-ingest path) warms up from ClickHouse history on startup.
+    ///
+    /// Without this, `DetectorRunner`'s own `HijackDetector` starts with an
+    /// empty prefix->ASN map and flags the *first* sighting of every prefix
+    /// as a possible hijack (confidence 0.85) until it has organically seen
+    /// each one once — a real false-positive storm on every restart of the
+    /// live NATS path, now that anomalies are actually escalated. Sharing
+    /// the instance also means both ingest paths learn from each other's
+    /// observations instead of maintaining inconsistent, duplicate state.
+    pub fn with_hijack_detector(mut self, detector: Arc<HijackDetector>) -> Self {
+        self.hijack_detector = detector;
+        self
+    }
+
     /// Run the detector loop
     ///
     /// Receives BGP records from NATS, runs through anomaly detectors,
@@ -1022,6 +1038,55 @@ mod tests {
         assert!(
             runner.stats().anomalies_detected > 0,
             "spread far outside baseline should be classified as anomalous and counted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shared_hijack_detector_avoids_cold_start_false_positive() {
+        use chrono::Utc;
+
+        // Simulate the HTTP-ingest path (AnomalyDetector) having already
+        // learned this prefix's legitimate origin — e.g. via warmup() from
+        // ClickHouse history on startup.
+        let shared_detector = Arc::new(HijackDetector::new());
+        let warmup_record = crate::clickhouse_exporter::BgpClickHouseRecord {
+            timestamp: Utc::now(),
+            event_type: "announce".to_string(),
+            prefix: "10.0.0.0/8".to_string(),
+            origin_as: 64512,
+            as_path: vec![64500, 64512],
+            peer_asn: 64500,
+            peer_ip: String::new(),
+            community: vec![],
+            source: "warmup".to_string(),
+            tenant_id: "bgp".to_string(),
+        };
+        let warmup_anomaly = shared_detector.check(&warmup_record);
+        assert!(
+            warmup_anomaly.is_some(),
+            "sanity check: a brand-new detector's first-ever sighting of a prefix flags — this \
+             is the known, expected cold-start behavior that warmup()/sharing is meant to absorb \
+             exactly once, not repeatedly per detector instance"
+        );
+
+        // Attach this pre-warmed, shared instance to a DetectorRunner —
+        // matching how lib.rs wires AnomalyDetector's hijack_detector_arc()
+        // into DetectorRunner via with_hijack_detector().
+        let runner = DetectorRunner::new().with_hijack_detector(Arc::clone(&shared_detector));
+
+        // The live NATS path now observes the same legitimate announcement
+        // for the "first" time from its own (previously separate, unwarmed)
+        // perspective. Before this fix, DetectorRunner held its own fresh
+        // HijackDetector and would have flagged this as a hijack every
+        // single time the process restarted. With the shared instance it
+        // must not, because the origin is already known.
+        let record = make_bgp_record("10.0.0.0/8", 64512, "announce");
+        let result = runner.process_record(&record).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            runner.stats().anomalies_detected,
+            0,
+            "an origin AS already known via the shared HijackDetector must not be re-flagged"
         );
     }
 }
