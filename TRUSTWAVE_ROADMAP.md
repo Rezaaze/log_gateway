@@ -195,21 +195,27 @@ werden über Kollektoren korrekt gruppiert. MRT-Archivdaten können eingelesen w
 ---
 
 ## Phase 2 — Wellenbaseline
-**Woche 4–8 | ⏳ Teilweise erledigt — `src/wave_baseline.rs` verifiziert 31.08.2026, `tools/baseline_builder/` kompiliert NICHT (Fund 01.09.2026, siehe unten)**
+**Woche 4–8 | ✅ Erledigt — 08.03.2026, Build-Bruch in `tools/baseline_builder/` gefunden und behoben am 01.09.2026**
 
-> **Korrektur (01.09.2026):** Die Aussage "Phase 2 erledigt" vom 31.08.2026 war
-> falsch — sie beruhte auf `cargo build --lib`, das nur die Haupt-Crate prüft,
-> nicht den gesamten Workspace. `cargo check --workspace` zeigt: Abschnitt
-> 2.2.3 (`tools/baseline_builder/`) referenziert `wave_baseline::BaselineBuilder`
-> und `wave_baseline::save_baseline()` — **beide existieren nicht** in
-> `src/wave_baseline.rs` (dort gibt es nur `WaveBaseline::save/load`, JSON-
-> basiert, kein bincode+zstd wie in 2.3.1 vorgesehen, und keinen
-> Streaming-Accumulator mit diesem Namen). Der Baustein für einen Accumulator
-> existiert (`WaveStatsAccumulator`, Welford-Algorithmus für Mean/Std/Min/Max),
-> liefert aber keine Perzentile (p50/p95/p99), die `WaveBaselineEntry`
-> benötigt — ein Streaming-Perzentil-Schätzer (z.B. t-digest) fehlt noch als
-> Designentscheidung. `src/wave_baseline.rs` selbst (Datenstruktur + Persistenz
-> + 10 Tests) ist real und getestet — nur der Batch-Builder-CLI-Tool ist kaputt.
+> **Verlauf:** Am 31.08.2026 wurde "Phase 2 erledigt" auf Basis von
+> `cargo build --lib` gemeldet — das prüft nur die Haupt-Crate, nicht den
+> gesamten Workspace. Am 01.09.2026 zeigte `cargo check --workspace`, dass
+> `tools/baseline_builder/` (Abschnitt 2.2.3) nicht kompilierte: es
+> referenzierte `wave_baseline::BaselineBuilder` und
+> `wave_baseline::save_baseline()`, die es in `src/wave_baseline.rs` nicht
+> gab (dort existierten nur `WaveBaseline::save/load`, JSON-basiert statt
+> bincode+zstd wie in 2.3.1 vorgesehen). Fix: `WaveBaseline::save()`/`load()`
+> nutzen jetzt bincode+zstd (Format-Konsistenz mit dem Live-Ladepfad in
+> `WaveAnomalyDetector::new()` ist kritisch — beide müssen dasselbe Format
+> lesen/schreiben); neuer `BaselineBuilder`-Accumulator (gruppiert nach
+> prefix/origin_as/as_path_hash, Mindest-Sample-Schwelle konfigurierbar,
+> Default 30 gemäß 2.1.4/2.2.2) nutzt den bereits vorhandenen, aber bis dahin
+> toten `percentile()`-Helper für echte p50/p95/p99 (keine Streaming-Approximation
+> nötig — die Rohwerte pro Gruppe werden bis zum `build()`-Aufruf gehalten,
+> für eine 3-Jahres-MRT-Batch-Verarbeitung mit begrenzter Gruppenzahl
+> vertretbar). 4 neue Tests. `cargo check --workspace` und
+> `cargo test --workspace --lib` jetzt sauber (269/270, bekanntes
+> Sandbox-Artefakt siehe `CLAUDE.md`).
 
 ### Abschnitt 2.1 — Baseline-Datenstruktur
 

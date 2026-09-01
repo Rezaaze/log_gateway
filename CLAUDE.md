@@ -14,10 +14,12 @@ Maßgeblich für den aktuellen Stand ist **`TRUSTWAVE_ROADMAP.md`**, nicht
 mehr primär dieses Dokument. `DEV_ROADMAP.md` ist ein verworfener
 Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
 
-**Verifiziert am 31.08.2026 (Session-Audit):**
-- Build/Tests laufen sauber: 263/264 Lib-Tests grün (1 Fehlschlag ist ein
+**Verifiziert am 31.08.2026 (Session-Audit), zuletzt aktualisiert 01.09.2026:**
+- Build/Tests laufen sauber: 269/270 Lib-Tests grün (1 Fehlschlag ist ein
   reines Sandbox-Artefakt: Test erwartet einen Permission-Fehler beim
-  Schreiben nach `/root/...`, läuft dort aber als root).
+  Schreiben nach `/root/...`, läuft dort aber als root). `cargo check
+  --workspace` (alle Workspace-Member, nicht nur die Haupt-Crate) ist
+  ebenfalls sauber.
   `cargo build`/`test` scheitern in dieser Remote-Sandbox NUR am
   Swagger-UI-Download in `utoipa-swagger-ui`'s build.rs (Netzwerk-Policy
   blockiert `github.com`-Archiv-Downloads, kein Code-Fehler) — Workaround:
@@ -42,11 +44,24 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
   ersetzt durch die neuere `src/wave_anomaly_detector.rs` (nutzt echten
   `z_score`, `p50`/`p99`-Baseline-Werte, Kollektor-Geodistanz), die jetzt
   als `pub mod` Teil der Crate ist (kompiliert, 5 Tests laufen in CI).
-  **Wichtig: `wave_anomaly_detector` ist weiterhin nicht an den Live-Pfad
-  angebunden** — der `PropagationAggregator` (`src/propagation.rs`), der
-  Live-BGP-Records zu `PropagationEvent`s über mehrere Kollektoren
-  aggregieren würde, wird nirgends aufgerufen. Das ist der nächste
-  substanzielle Schritt für Phase 3 der TrustWave-Roadmap.
+- **Update 01.09.2026 — Phase 3 (Wave Anomaly Detector) an Live-Pfad
+  angebunden:** `DetectorRunner` speist jetzt jeden `announce`-Record in
+  einen `PropagationAggregator`; abgeschlossene `PropagationEvent`s werden
+  vom `WaveAnomalyDetector` bewertet, anomale Scores laufen über denselben
+  `EscalationRouter` wie Hijack/Flapping. Ein Hintergrund-Task flusht alle
+  2s Gruppen, deren Fenster ohne natürlichen Abschluss abgelaufen ist. Neue
+  `[wave]`-Configsektion (`enabled`, `baseline_path`), standardmäßig aktiv
+  und ungefährlich ohne vorhandene Baseline-Datei (Detector degradiert dann
+  zu "keine Anomalien"). 2 neue Tests.
+- **Update 01.09.2026 — `tools/baseline_builder/` repariert:** Beim Verifizieren
+  mit `cargo check --workspace` (nicht nur `--lib`) stellte sich heraus, dass
+  `tools/baseline_builder` gar nicht kompilierte — es referenzierte
+  `wave_baseline::BaselineBuilder`/`save_baseline()`, die nicht existierten.
+  Fix: `WaveBaseline::save()`/`load()` nutzen jetzt bincode+zstd statt JSON
+  (Format-Konsistenz mit dem Live-Ladepfad ist kritisch); neuer
+  `BaselineBuilder`-Accumulator nutzt den bereits vorhandenen, aber toten
+  `percentile()`-Helper für echte p50/p95/p99. 4 neue Tests. Details siehe
+  `TRUSTWAVE_ROADMAP.md` Phase 2.
 - **Nicht angefasst, aber auffällig:** `src/detector_loop.rs` ist eine
   zweite, vollständige Pipeline-Implementierung (eigene NATS-Subscription,
   RPKI→IRR→Hijack→Flapping→Dedup→Webhook) mit eigener Testabdeckung

@@ -132,20 +132,35 @@ impl WaveBaseline {
         }
     }
 
+    /// Loads a baseline written by `save()` — bincode-encoded, zstd-compressed
+    /// (see Abschnitt 2.3.1 in TRUSTWAVE_ROADMAP.md: JSON was rejected as too
+    /// large for the ~800k prefixes a full baseline covers).
     pub fn load(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
+        let compressed = std::fs::read(path)
             .with_context(|| format!("Failed to read baseline file: {:?}", path))?;
-        let baseline: WaveBaseline =
-            serde_json::from_str(&content).with_context(|| "Failed to parse baseline JSON")?;
+        let bytes = zstd::decode_all(compressed.as_slice())
+            .with_context(|| "Failed to decompress baseline (zstd)")?;
+        let baseline: WaveBaseline = bincode::deserialize(&bytes)
+            .with_context(|| "Failed to deserialize baseline (bincode)")?;
         Ok(baseline)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let content =
-            serde_json::to_string_pretty(self).with_context(|| "Failed to serialize baseline")?;
-        std::fs::write(path, content)
+        let bytes =
+            bincode::serialize(self).with_context(|| "Failed to serialize baseline (bincode)")?;
+        let compressed = zstd::encode_all(bytes.as_slice(), 3)
+            .with_context(|| "Failed to compress baseline (zstd)")?;
+        std::fs::write(path, compressed)
             .with_context(|| format!("Failed to write baseline to {:?}", path))?;
         Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     pub fn find_entry(
@@ -164,7 +179,103 @@ impl WaveBaseline {
     }
 }
 
-#[allow(dead_code)]
+/// Persists a baseline the same way as `WaveBaseline::save()` — a thin
+/// free-function wrapper kept for callers (e.g. `tools/baseline_builder`)
+/// that build a baseline incrementally via `BaselineBuilder` rather than
+/// holding a `WaveBaseline` directly.
+pub fn save_baseline(baseline: &WaveBaseline, path: &Path) -> Result<()> {
+    baseline.save(path)
+}
+
+/// Same polynomial hash used by `PropagationEvent`/`WaveAnomalyDetector` to
+/// key baseline entries by AS path — must stay identical across all three
+/// so a live-path lookup matches what the offline builder produced.
+fn path_hash(as_path: &[u32]) -> u64 {
+    as_path.iter().fold(0u64, |acc, &asn| {
+        acc.wrapping_mul(31).wrapping_add(asn as u64)
+    })
+}
+
+/// Accumulates `PropagationEvent`s (typically parsed from historical MRT
+/// archive data) into a `WaveBaseline`, grouped by (prefix, origin_as,
+/// as_path_hash). Only groups that reach `min_samples` observations produce
+/// a baseline entry — see Abschnitt 2.1.4/2.2.2 in TRUSTWAVE_ROADMAP.md
+/// ("Stabilität-Counter: ab n ≥ 30 Samples gilt Baseline als verlässlich").
+pub struct BaselineBuilder {
+    samples: std::collections::HashMap<(String, u32, u64), Vec<f64>>,
+    min_samples: usize,
+}
+
+impl Default for BaselineBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BaselineBuilder {
+    pub fn new() -> Self {
+        Self {
+            samples: std::collections::HashMap::new(),
+            min_samples: 30,
+        }
+    }
+
+    /// Overrides the minimum sample count required for a group to produce a
+    /// baseline entry (default: 30).
+    pub fn with_min_samples(mut self, min_samples: usize) -> Self {
+        self.min_samples = min_samples;
+        self
+    }
+
+    /// Feeds one `PropagationEvent`'s spread into its (prefix, origin_as,
+    /// as_path) group.
+    pub fn add_event(&mut self, event: &crate::propagation::PropagationEvent) {
+        let key = (
+            event.prefix.to_string(),
+            event.origin_as,
+            path_hash(&event.as_path),
+        );
+        self.samples.entry(key).or_default().push(event.spread_ms);
+    }
+
+    /// Number of distinct (prefix, origin_as, as_path) groups observed so
+    /// far, regardless of whether they meet `min_samples` yet.
+    pub fn entry_count(&self) -> usize {
+        self.samples.len()
+    }
+
+    /// Finalizes accumulated samples into a `WaveBaseline`. Groups with
+    /// fewer than `min_samples` observations are dropped — not enough data
+    /// to be a reliable baseline for wave-score comparison.
+    pub fn build(&self) -> WaveBaseline {
+        let mut baseline = WaveBaseline::new("Built via tools/baseline_builder from MRT archive");
+        let entries: Vec<WaveBaselineEntry> = self
+            .samples
+            .iter()
+            .filter(|(_, values)| values.len() >= self.min_samples)
+            .map(|((prefix, origin_as, as_path_hash), values)| {
+                let mut sorted = values.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let stats = compute_spread_stats(&sorted);
+                WaveBaselineEntry {
+                    prefix: prefix.clone(),
+                    origin_as: *origin_as,
+                    as_path_hash: *as_path_hash,
+                    sample_count: sorted.len() as u64,
+                    min_spread_ms: stats.min_ms,
+                    p50_spread_ms: percentile(&sorted, 50.0),
+                    p95_spread_ms: percentile(&sorted, 95.0),
+                    p99_spread_ms: percentile(&sorted, 99.0),
+                    max_spread_ms: stats.max_ms,
+                    std_dev: stats.std_ms,
+                }
+            })
+            .collect();
+        baseline.extend(entries);
+        baseline
+    }
+}
+
 fn percentile(sorted_values: &[f64], p: f64) -> f64 {
     if sorted_values.is_empty() {
         return 0.0;
@@ -253,7 +364,7 @@ mod tests {
         };
         let mut baseline = baseline.clone();
         baseline.entries.push(entry);
-        let temp_path = "/tmp/test_baseline4.json";
+        let temp_path = "/tmp/test_baseline4.bin.zst";
         baseline.save(Path::new(temp_path)).unwrap();
         let loaded = WaveBaseline::load(Path::new(temp_path)).unwrap();
         assert_eq!(loaded.entries.len(), 1);
@@ -287,5 +398,95 @@ mod tests {
             vec![1, 2, 3],
             arrivals
         )));
+    }
+
+    fn make_event(
+        prefix: &str,
+        origin_as: u32,
+        as_path: Vec<u32>,
+        spread_ms: f64,
+    ) -> crate::propagation::PropagationEvent {
+        use std::collections::BTreeMap;
+        let arrivals: BTreeMap<String, f64> = [
+            ("rrc00".to_string(), 1000.0),
+            ("rrc01".to_string(), 1000.0 + spread_ms / 1000.0),
+        ]
+        .into_iter()
+        .collect();
+        crate::propagation::PropagationEvent::new(
+            prefix.parse().unwrap(),
+            origin_as,
+            as_path,
+            arrivals,
+        )
+    }
+
+    #[test]
+    fn test_baseline_builder_drops_groups_below_min_samples() {
+        let mut builder = BaselineBuilder::new().with_min_samples(30);
+        for i in 0..29 {
+            builder.add_event(&make_event(
+                "8.8.8.0/24",
+                15169,
+                vec![1103, 15169],
+                20.0 + i as f64,
+            ));
+        }
+        assert_eq!(builder.entry_count(), 1, "one distinct group observed");
+        let baseline = builder.build();
+        assert!(
+            baseline.is_empty(),
+            "29 samples is below the 30-sample reliability threshold"
+        );
+    }
+
+    #[test]
+    fn test_baseline_builder_produces_entry_at_min_samples() {
+        let mut builder = BaselineBuilder::new().with_min_samples(30);
+        for i in 0..30 {
+            builder.add_event(&make_event(
+                "8.8.8.0/24",
+                15169,
+                vec![1103, 15169],
+                20.0 + i as f64,
+            ));
+        }
+        let baseline = builder.build();
+        assert_eq!(baseline.len(), 1);
+        let entry = &baseline.entries[0];
+        assert_eq!(entry.prefix, "8.8.8.0/24");
+        assert_eq!(entry.origin_as, 15169);
+        assert_eq!(entry.sample_count, 30);
+        // Samples are 20.0..=49.0ms, uniformly spaced — p50 should land near
+        // the middle of that range.
+        assert!(entry.p50_spread_ms > 30.0 && entry.p50_spread_ms < 40.0);
+        assert!(entry.min_spread_ms <= entry.p50_spread_ms);
+        assert!(entry.p50_spread_ms <= entry.p95_spread_ms);
+        assert!(entry.p95_spread_ms <= entry.p99_spread_ms);
+        assert!(entry.p99_spread_ms <= entry.max_spread_ms);
+    }
+
+    #[test]
+    fn test_baseline_builder_separates_different_groups() {
+        let mut builder = BaselineBuilder::new().with_min_samples(1);
+        builder.add_event(&make_event("8.8.8.0/24", 15169, vec![1103, 15169], 20.0));
+        builder.add_event(&make_event("1.1.1.0/24", 13335, vec![1103, 13335], 30.0));
+        assert_eq!(builder.entry_count(), 2);
+        let baseline = builder.build();
+        assert_eq!(baseline.len(), 2);
+    }
+
+    #[test]
+    fn test_baseline_builder_save_load_round_trip_via_free_function() {
+        let mut builder = BaselineBuilder::new().with_min_samples(1);
+        builder.add_event(&make_event("8.8.8.0/24", 15169, vec![1103, 15169], 42.0));
+        let baseline = builder.build();
+
+        let temp_path = "/tmp/test_baseline_builder_roundtrip.bin.zst";
+        save_baseline(&baseline, Path::new(temp_path)).unwrap();
+        let loaded = WaveBaseline::load(Path::new(temp_path)).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded.entries[0].prefix, "8.8.8.0/24");
+        let _ = std::fs::remove_file(temp_path);
     }
 }
