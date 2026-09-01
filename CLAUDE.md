@@ -123,6 +123,34 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
   6 neue Tests (2× Cold-Start-Sharing, 2× symmetrischer Z-Score/Order-
   Deviation, 1× Baseline-Order-Tracking bereits mit Fix 3 mitgeliefert).
   Details siehe `TRUSTWAVE_ROADMAP.md` Phase 3.
+- **Update 01.09.2026 — erster echter Backtest (Pakistan Telecom/YouTube
+  2008) gegen echte RIPE-RIS-Archivdaten, kein Kalibrierungs-Ergebnis
+  sondern ein negatives, aber sehr aufschlussreiches:** 29.110 echte MRT-
+  Dateien heruntergeladen (13 Kollektoren, 1 Woche Vor-Hijack-Daten), echte
+  60.127-Eintrag-Baseline gebaut, 624 echte Hijack-Fenster-Dateien. Zwei
+  reale Funde:
+  1. **Tooling-Bug gefixt** (Commit `aca1db1`): `tools/backtest`s
+     `build_events()` poolte alle Dateien des 4h-Fensters in einen Group-by
+     statt (wie `baseline_builder`) pro Zeitslot zu gruppieren — erzeugte
+     bogus Spread-Werte von Minuten/Stunden statt Sekunden.
+  2. **Wave-Physics strukturell blind für Origin-Hijacks:**
+     `WaveAnomalyDetector` sucht die Baseline exakt über
+     `(prefix, origin_as, path_hash)` — die Hijacker-ASN kommt in der aus
+     legitimen Daten gebauten Baseline per Definition nie vor, jedes
+     Hijack-Event ist ein garantierter Lookup-Miss. Ergebnis nach Fix von
+     Bug 1: **TPR 0,0%, FPR 33,3%** — löst das in `TRUSTWAVE_ROADMAP.md`
+     Abschnitt 3.3 definierte Entscheidungs-Gate aus (TPR < 80% →
+     Hypothese überarbeiten), mit der Einschränkung, dass der Test die
+     Hypothese wegen des Keying-Fehlers noch nicht fair prüfen konnte.
+  Separat geprüft (neues committed Diagnose-Tool
+  `tools/backtest/examples/hijack_detector_realcheck.rs`): die einfache
+  `HijackDetector`-Heuristik (getrennt von Wave-Physics) hat bei denselben
+  echten Daten real ausgelöst (Alert 53s nach offiziellem Hijack-Start),
+  aber mit dokumentiertem Vorbehalt — null Vor-Hijack-Sichtungen des exakten
+  Präfixes (De-Aggregation eines größeren Aggregats), also dieselbe
+  Cold-Start-Mehrdeutigkeit wie oben Fund #1, nur nicht durch Warmup lösbar.
+  Details, volle Zahlen und nächste Schritte siehe `TRUSTWAVE_ROADMAP.md`
+  Abschnitt 3.2.
 
 ---
 

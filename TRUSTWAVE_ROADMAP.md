@@ -369,7 +369,8 @@ pub struct Signals {
 ---
 
 ### Abschnitt 3.2 — Backtesting Framework
-**⏳ Tooling erledigt (01.09.2026) — echte Fallstudien (3.2.1/3.2.2) noch offen**
+**🔴 Erster echter Testlauf (01.09.2026): Wave-Physics-Hypothese NICHT bestätigt —
+Entscheidungs-Gate unten ausgelöst, Ursache identifiziert, siehe Verlauf**
 
 > 3.2.3–3.2.5 (die CLI selbst) sind gebaut und gegen echte RIPE-RIS-Archivdaten
 > smoke-getestet: `tools/backtest/` hat real heruntergeladene MRT-Dateien
@@ -380,18 +381,75 @@ pub struct Signals {
 > Gedächtnis zu raten wäre riskant falsch. Stattdessen liest die CLI eine
 > `case.toml` (Prefix, legitime/Hijacker-ASN, Zeitfenster, Pfade), die der
 > Bediener anhand einer Primärquelle befüllt (z.B. bgpstream.com,
-> RIPE-Incident-Writeups, NANOG-Mailingliste). **Fehlt noch:** 3.2.1 (die
-> drei `case.toml`-Dateien mit verifizierten echten Werten befüllen) und 3.2.2
-> (die zugehörigen MRT-Archive herunterladen — machbar, `data.ris.ripe.net`
-> ist erreichbar, aber für einen validen Backtest reicht das ±2h-Fenster
-> allein nicht: die Baseline braucht Wochen an Vor-Hijack-Daten pro Präfix,
-> um die ≥30-Sample-Schwelle zu erreichen — das ist der eigentlich große
-> Download, nicht die ±2h Hijack-Daten selbst).
+> RIPE-Incident-Writeups, NANOG-Mailingliste).
+
+> **Update 01.09.2026 — erster echter Backtest gegen echte 2008er Daten:**
+> 3.2.1/3.2.2 für Pakistan Telecom/YouTube 2008 real durchgeführt (nicht nur
+> Tooling-Smoke-Test): 29.110 echte MRT-Archivdateien heruntergeladen (13
+> Kollektoren, 17.–24.02.2008, ~1.8GB), daraus per `baseline_builder` eine
+> echte Baseline gebaut (5.762.598 Events geparst, 60.127 verlässliche
+> Einträge, min_samples=30, Laufzeit 30m14s), plus 624 echte MRT-Dateien für
+> das Hijack-Fenster selbst (24.02.2008 18:00–22:00 UTC). Zwei reale Funde:
+>
+> 1. **Backtest-Tool-Bug gefixt:** `build_events()` in `tools/backtest`
+>    poolte alle Dateien des gesamten 4h-Fensters in einen einzigen
+>    Group-by-Pass statt (wie `baseline_builder`) pro Zeitslot zu gruppieren
+>    — dadurch bekamen wiederkehrende Routen `spread_ms`-Werte von Minuten
+>    bis Stunden statt der echten Sub-10s-Ausbreitungsverzögerung. Gefixt
+>    (Commit `aca1db1`): jetzt Slot-Gruppierung analog `baseline_builder`.
+> 2. **Wave-Physics-Baseline-Lookup ist strukturell blind für klassische
+>    Origin-Hijacks:** `WaveAnomalyDetector::score_event()` sucht Baseline-
+>    Einträge exakt über `(prefix, origin_as, as_path_hash)`. Da die
+>    Hijacker-ASN (17557) in der aus legitimen Vor-Hijack-Daten gebauten
+>    Baseline (Origin AS36561) per Definition nie vorkommt, ist jedes
+>    Hijack-Event ein garantierter Lookup-Miss → Score 0.0, nie erkannt.
+>    Das ist kein Kalibrierungsproblem, sondern ein Konstruktionsfehler:
+>    **Ergebnis nach Fix von Bug 1: TPR 0,0%, FPR 33,3%** (57.717
+>    PropagationEvents, 7 Hijack-Events alle verpasst, 19.207 von 57.680
+>    False Positives). Nach dem Entscheidungs-Gate unten (TPR < 80% →
+>    Hypothese überarbeiten) ist das formal ausgelöst — mit der wichtigen
+>    Einschränkung, dass der aktuelle Test die Hypothese wegen des
+>    Keying-Fehlers noch gar nicht fair prüfen konnte. Nächster Schritt vor
+>    einer erneuten Bewertung: Baseline-Lookup müsste über Präfix (nicht
+>    Präfix+Origin-AS) erfolgen, damit ein neuer Origin mit dem historischen
+>    Ausbreitungsmuster desselben Präfixes verglichen wird statt gar nicht
+>    gefunden zu werden. Noch nicht umgesetzt — Design-Entscheidung, kein
+>    Ein-Zeilen-Fix.
+>
+> Ergänzend, per separatem Diagnose-Tool (`tools/backtest/examples/
+> hijack_detector_realcheck.rs`, committed) real gegen dieselben Daten
+> geprüft: **`HijackDetector`** (die einfache Origin-AS-Wechsel-Heuristik,
+> eine von der Wave-Physics komplett getrennte Erkennungsebene) **hat real
+> ausgelöst** — Alert um 18:47:53 UTC (53s nach offiziellem Hijack-Start
+> 18:47:00 UTC laut `cases/pakistan-telecom-youtube-2008.toml`) für die
+> Hijacker-ASN 17557, sowie ein zweiter Alert um 20:07:25 UTC für die
+> zurückkämpfende legitime ASN 36561. Wichtiger Vorbehalt (vom Tool selbst
+> ausgegeben, nicht nachträglich beschönigt): es gab **null** Vor-Hijack-
+> Sichtungen des exakten Präfixes 208.65.153.0/24 — Pakistan Telecom hat es
+> per De-Aggregation eines größeren, bereits geroutet Aggregats (YouTubes
+> /22) neu erzeugt. `HijackDetector` kann "erste Sichtung eines neuen
+> spezifischeren Präfixes durch den Angreifer" nicht von "erste Sichtung
+> eines neuen spezifischeren Präfixes durch den legitimen Eigentümer selbst"
+> unterscheiden — hier stimmte die Reihenfolge zufällig (Angreifer zuerst),
+> das ist aber keine verlässliche Erkennungsgarantie, sondern dieselbe
+> bekannte Cold-Start-Mehrdeutigkeit wie Fund #1 aus der kritischen Review
+> vom Vortag, nur in einer Variante, die durch Warmup allein nicht behebbar
+> ist (das Präfix existierte vorher schlicht nicht).
+>
+> **Fazit:** Erste echte, verifizierte End-to-End-Erkenntnis — nicht die
+> erhoffte "Wave Physics erkennt echten Hijack", sondern eine ehrliche,
+> zweigeteilte: die einfache Origin-Heuristik hätte in diesem einen Fall
+> (mit Vorbehalt) einen Alert ausgelöst, die aufwendigere Wave-Physics-Ebene
+> strukturell nicht, plus ein neu gefundener und gefixter Tooling-Bug. Bevor
+> Phase 4 in Angriff genommen wird, muss (a) das Baseline-Lookup-Design
+> überarbeitet und der Test wiederholt werden, und (b) MyEtherWallet 2018
+> als zweiter, unabhängiger Datenpunkt real durchgeführt werden — ein
+> einzelner Fall beweist nichts.
 
 | # | Task | Datei | Details |
 |---|---|---|---|
-| 3.2.1 | Bekannte Hijack-Events als Testfälle definieren | `tools/backtest/cases/*.toml` | MyEtherWallet 24.04.2018, Pakistan Telecom 24.02.2008, Rostelecom 01.04.2020 — Parameter noch einzutragen |
-| 3.2.2 | MRT-Files für Hijack-Zeiträume + Vor-Hijack-Baseline herunterladen | — | ± 2h um Hijack-Zeitpunkt für den Test; Wochen an Vorlauf für eine reliable Baseline (via `tools/baseline_builder`) |
+| 3.2.1 | Bekannte Hijack-Events als Testfälle definieren | `tools/backtest/cases/*.toml` | Pakistan Telecom 2008 ✅ real durchgeführt; MyEtherWallet 2018 case.toml verifiziert vorhanden, Daten noch nicht heruntergeladen; Rostelecom 2020 bewusst offen (Quellenlage unklar, siehe `cases/README.md`) |
+| 3.2.2 | MRT-Files für Hijack-Zeiträume + Vor-Hijack-Baseline herunterladen | — | Pakistan Telecom 2008 ✅ 29.110 + 624 echte Dateien heruntergeladen, echte 60.127-Eintrag-Baseline gebaut (nicht committed, lokale Sandbox-Daten, ~1.8GB) |
 | 3.2.3 | Backtesting-Runner CLI | `tools/backtest/` | ✅ Liest MRT, baut PropagationEvents, läuft durch `WaveAnomalyDetector` — smoke-getestet gegen echte RIPE-Daten |
 | 3.2.4 | Metriken: True Positive Rate, False Positive Rate, Erkennungs-Latenz | `tools/backtest/` | ✅ Confusion-Matrix + Latenz zum ersten korrekt erkannten Event |
 | 3.2.5 | Training/Test-Split erzwingen | `tools/backtest/` | ✅ `WaveBaseline::data_cutoff_ts` (spätester Sample-Zeitstempel der Quelldaten, nicht Datei-Erstellzeit) muss vor `hijack_start` liegen, sonst bricht die CLI hart ab |

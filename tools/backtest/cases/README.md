@@ -9,11 +9,11 @@ in the tool itself.
 
 ## Status
 
-| Case | Prefix/ASN/timestamps | MRT data | Baseline |
-|---|---|---|---|
-| `pakistan-telecom-youtube-2008.toml` | ✅ verified (RIPE NCC's own case study — same data source this project reads) | ❌ not downloaded | ❌ not built |
-| `myetherwallet-route53-2018.toml` | ✅ cross-verified (3 independent sources) — see the file's header note on the sub-prefix nuance | ❌ not downloaded | ❌ not built |
-| Rostelecom, 1 April 2020 | ⚠️ **not usable yet** — see below | — | — |
+| Case | Prefix/ASN/timestamps | MRT data | Baseline | Real backtest result |
+|---|---|---|---|---|
+| `pakistan-telecom-youtube-2008.toml` | ✅ verified (RIPE NCC's own case study — same data source this project reads) | ✅ downloaded once, real run (01.09.2026) — not kept in repo/committed (~1.8GB), re-download from `data.ris.ripe.net` to reproduce | ✅ built once (60,127 entries, min_samples=30) — not kept in repo | ✅ real run done — see `TRUSTWAVE_ROADMAP.md` Abschnitt 3.2 for full numbers. Wave-physics: TPR 0.0%, FPR 33.3% (structural baseline-lookup gap, not calibration). Simple `HijackDetector` layer: did fire, with a documented caveat (cold-start on a never-before-seen sub-prefix) |
+| `myetherwallet-route53-2018.toml` | ✅ cross-verified (3 independent sources) — see the file's header note on the sub-prefix nuance | ❌ not downloaded | ❌ not built | not yet run |
+| Rostelecom, 1 April 2020 | ⚠️ **not usable yet** — see below | — | — | — |
 
 ## Rostelecom, 1 April 2020 — why there's no case file yet
 
