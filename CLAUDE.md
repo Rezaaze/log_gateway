@@ -178,6 +178,19 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
   eine andere, tiefere Baustelle als die heute gefixte Scoring-Logik
   (nachweislich korrekt, sobald ein Baseline-Eintrag existiert). Details
   siehe `TRUSTWAVE_ROADMAP.md` Abschnitt 3.2.
+- **Update 01.09.2026 — Hypothese "längeres Fenster reicht" real getestet
+  und widerlegt:** Baseline-Fenster 7→21 Tage verlängert (echte 78.557
+  Dateien, 5,1GB, kostenlos von RIPE RIS), 91.325 statt 60.127
+  Baseline-Einträge insgesamt. Für das konkrete Adressgebiet des Pakistan-
+  Telecom-Hijacks bleibt es trotzdem bei exakt NULL Einträgen — dreimal
+  mehr Rohdaten, keine einzige zusätzliche qualifizierende
+  Multi-Kollektor-Ko-Okkurrenz. Bestätigt: das ist kein
+  Stichprobengrößen-Problem, sondern strukturell — die aktuelle
+  Announce-Delta-only-Baseline-Methodik kann für diese Art stabiler Route
+  praktisch nie genug synchrone Beobachtungen sammeln, unabhängig von der
+  Fensterlänge. TPR bleibt 0,0%. Nächster echter Schritt wäre RIB-Table-
+  Dump-Integration (andere Datenquelle, nicht nur mehr vom selben). Details
+  siehe `TRUSTWAVE_ROADMAP.md` Abschnitt 3.2.
 
 ---
 

@@ -494,19 +494,42 @@ Entscheidungs-Gate unten ausgelöst, Ursache identifiziert, siehe Verlauf**
 > kleiner Fix) oder eine grundsätzlich andere Definition einer "Baseline"
 > für Prefixe ohne beobachtete Announce-Wellen. Noch nicht begonnen.
 >
+> **Update 01.09.2026 — 3× längeres Baseline-Fenster getestet, Hypothese
+> "reicht mehr Zeit" widerlegt:** Um zu prüfen, ob das Coverage-Problem nur
+> Fenstergröße ist, wurde der Baseline-Zeitraum von 7 auf 21 Tage verlängert
+> (dieselbe kostenlose RIPE-RIS-Quelle, 78.557/78.624 Dateien real
+> heruntergeladen, 5,1GB, 91.325 statt 60.127 Baseline-Einträge insgesamt —
+> Coverage-Lücke insgesamt fällt von 17.584 auf 6.856 unabgedeckte Events).
+> Für das konkrete Adressgebiet des Hijacks (208.65.152.0/22 und alle
+> anderen Präfixlängen, die 208.65.153.0/24 abdecken würden) bleibt es aber
+> bei **exakt null Einträgen** — nicht nur "immer noch unter min_samples",
+> sondern buchstäblich keine einzige qualifizierende Multi-Kollektor-
+> Ko-Okkurrenz in 21 Tagen, dreimal mehr Rohdaten als beim ersten Versuch.
+> Das widerlegt die Hypothese "einfach ein längeres Fenster reicht" für
+> diesen Fall: die legitimen historischen Announces dieser Route
+> koordinieren sich über Kollektoren hinweg praktisch nie innerhalb eines
+> 5-Minuten-Slots, unabhängig von der Beobachtungsdauer — bestätigt die
+> strukturelle Diagnose (Announce-Delta-only-Methodik), nicht nur ein
+> Stichprobengrößen-Problem. TPR bleibt 0,0%, FPR 32,2% (vergleichbar mit
+> den vorherigen Läufen).
+>
 > **Gesamtfazit nach diesem Durchgang:** Die Scoring-Logik-Fixes von heute
 > sind real, getestet und korrekt — sie greifen aber nicht, weil die
 > zugrundeliegende Baseline für genau diese Art von Präfix strukturell leer
-> bleibt. Für Pakistan Telecom 2008 konkret bleibt es dabei: die einfache
+> bleibt, und ein 3× längeres Fenster ändert daran nachweislich nichts. Für
+> Pakistan Telecom 2008 konkret bleibt es dabei: die einfache
 > `HijackDetector`-Ebene hätte (mit dem dokumentierten Cold-Start-Vorbehalt)
 > ausgelöst, die Wave-Physics-Ebene nicht — nicht weil ihre Erkennungslogik
-> falsch wäre, sondern weil ihr die Trainingsdaten für dieses Präfix fehlen.
-> Bevor Phase 4 in Angriff genommen wird: (a) RIB-Dump-basierte
-> Baseline-Erweiterung als eigenes, größeres Vorhaben bewerten, und (b)
-> MyEtherWallet 2018 als zweiten unabhängigen Datenpunkt real durchführen —
-> ein einzelner Fall beweist nichts, und dieser eine Fall hat sich als
-> ungewöhnlich hart herausgestellt (De-Aggregation UND spärliche
-> Baseline-Daten kombiniert).
+> falsch wäre, sondern weil ihr die Trainingsdaten für dieses Präfix
+> strukturell fehlen, egal wie lange man das aktuelle Datenformat
+> beobachtet. Bevor Phase 4 in Angriff genommen wird: (a) RIB-Dump-basierte
+> Baseline-Erweiterung als eigenes, größeres Vorhaben bewerten — jetzt mit
+> empirischer Begründung, warum ein längeres Fenster allein NICHT reicht,
+> und (b) MyEtherWallet 2018 als zweiten unabhängigen Datenpunkt real
+> durchführen — ein einzelner Fall beweist nichts, und dieser eine Fall hat
+> sich als ungewöhnlich hart herausgestellt (De-Aggregation UND
+> strukturell fehlende Baseline-Daten kombiniert, nicht durch mehr
+> Beobachtungszeit lösbar).
 
 | # | Task | Datei | Details |
 |---|---|---|---|
