@@ -1,0 +1,38 @@
+# Amazon Route 53 / MyEtherWallet BGP hijack, 24 April 2018.
+#
+# Cross-verified across independent sources:
+#   https://www.thousandeyes.com/blog/amazon-route-53-dns-and-bgp-hijack
+#   https://www.internetsociety.org/blog/2018/04/amazons-route-53-bgp-hijack/
+#   https://medium.com/oracledevs/bgp-hijack-of-amazon-dns-to-steal-crypto-currency-a90dd29cb3ab
+#   AS10297 (eNet/XLHost) ownership: https://bgp.he.net/AS10297
+#
+# Background: eNet/XLHost (AS10297), a small Columbus-OH ISP, had a router
+# compromised and used it to announce Amazon Route 53's DNS prefixes for
+# ~2 hours, standing up a fake DNS server that answered only for
+# myetherwallet.com, redirecting victims to a phishing site.
+#
+# Note: the real incident hijacked several more-specific /24s carved out of
+# Amazon's normally-announced /23s (a sub-prefix hijack, not a same-prefix
+# reorigination like the Pakistan Telecom case) — sources differ slightly on
+# exactly which /24s and which legitimate AS announces each covering block
+# (AS16509 for the /23, with AS39111/AS7224/AS14618 also cited for
+# neighboring ranges). This case file uses the /23 that's consistently
+# attributed to Amazon (AS16509) across sources; if you can pin down the
+# specific /24 sub-prefix and its normal announcer with more confidence,
+# prefer that — it's the more faithful reproduction of what was actually
+# exploited.
+
+name = "myetherwallet-route53-2018"
+prefix = "205.251.192.0/23"
+legitimate_origin_as = 16509   # Amazon
+hijacker_origin_as   = 10297   # eNet / XLHost
+hijack_start = "2018-04-24T11:05:00Z"
+hijack_end   = "2018-04-24T12:55:00Z"
+
+# NOT YET POPULATED — fill in before running (see
+# pakistan-telecom-youtube-2008.toml for the general procedure; data.ris.ripe.net
+# archives back to 2018 the same way).
+mrt_data_dir  = "data/mrt/myetherwallet-2018"
+baseline_path = "data/baselines/myetherwallet-2018-pre-incident.bin.zst"
+
+detection_threshold = 0.5
