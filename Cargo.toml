@@ -53,7 +53,10 @@ zstd = "0.13"
 jsonschema = { version = "0.18", default-features = false }
 jsonwebtoken = "9"
 utoipa = { version = "4", features = ["axum_extras", "chrono", "uuid"] }
-utoipa-swagger-ui = { version = "7", features = ["axum"] }
+# "vendored": Swagger UI wird als Crate mitgeliefert statt zur Build-Zeit von
+# github.com heruntergeladen. Ohne dieses Feature schlägt `cargo build` in jeder
+# Umgebung ohne GitHub-Zugriff fehl (CI-Runner, restriktive Netz-Policy).
+utoipa-swagger-ui = { version = "7", features = ["axum", "vendored"] }
 crossbeam = { version = "0.8", features = ["crossbeam-queue"] }
 console-subscriber = { version = "0.4", optional = true }
 reqwest = { version = "0.12", features = ["json"], default-features = false }

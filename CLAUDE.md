@@ -124,6 +124,40 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
   Deviation, 1× Baseline-Order-Tracking bereits mit Fix 3 mitgeliefert).
   Details siehe `TRUSTWAVE_ROADMAP.md` Phase 3.
 
+- **Update 08.09.2026 — Projektbewertung + vier Bugfixes:** Auf die Frage, ob
+  sich die Weiterarbeit lohnt, wurde die Wellenphysik-Hypothese nicht nur im
+  Code, sondern an echten RIPE-Daten gemessen (2 Min Live-Stream, 1,95 Mio
+  Announcements; 5 MRT-Archive, 1,5 Mio Records). Ergebnis und Empfehlung
+  stehen in **`PROJEKT_BEWERTUNG.md`** — Kurzfassung: der RPKI/IRR-Teil trägt,
+  die Wellenphysik in der aktuellen Form nicht (gemessener Spread p50 = 1000 ms
+  statt ~100 ms, nur 3,5 % der Ankündigungen von ≥3 Kollektoren mit gleichem
+  Pfad gesehen, MRT-Archive ohne Sub-Sekunden-Auflösung, zwei der fünf Signale
+  praktisch konstant). Vier daraus gefundene Bugs sind behoben:
+  1. **`tools/bgp_stream` las den Kollektor aus `data.id`** — das ist im
+     RIS-Live-Stream eine pro Nachricht eindeutige ID, der Kollektor steht in
+     `data.host`. Jedes Record bekam damit einen eigenen "Kollektor"; die
+     gesamte Triangulation lief live auf Unsinn. Fix: `host` + neuer
+     `collector_from_host()`.
+  2. **Baseline-Schlüssel passte nicht zum Live-Schlüssel** —
+     `baseline_builder` schrieb Events mit `as_path = vec![origin_as]`, der
+     Live-Pfad suchte über den vollen Pfad-Hash. `find_entry()` traf nie, der
+     Wave-Detektor fiel still auf `Normal` zurück. Fix: **ein** gemeinsamer
+     `propagation::path_hash()` (vorher drei Kopien) + voller AS-Pfad im Event.
+  3. **Batch-Tools hatten kein Zeitfenster** — Spreads bis 293 s aus
+     verschmolzenen, unabhängigen Ankündigungen. Fix: gemeinsame
+     `propagation::build_events_batch()` mit Sessionisierung wie im
+     Live-Aggregator, `--window-secs` (Default 10 s). Verifiziert gegen echte
+     Archivdaten: kein Baseline-Eintrag mehr über dem Fenster.
+  4. **Build lud zur Build-Zeit von github.com** (`utoipa-swagger-ui`) → Fix:
+     `vendored`-Feature. Dabei zusätzlich gefunden: `-C target-cpu=native` in
+     `.cargo/config.toml` lässt den Build in VMs mit über-meldendem CPUID mit
+     **SIGILL** abstürzen und backt im CI die Runner-CPU in ein Binary für einen
+     anderen Host — jetzt opt-in per `RUSTFLAGS`.
+  Zusätzlich zählt `WaveAnomalyDetector` jetzt Baseline-Treffer/-Fehlschläge und
+  `DetectorRunner` loggt einmalig einen Fehler, wenn eine geladene Baseline nach
+  1000 Events nie gematcht hat — gegen genau die stille Fehlfunktion aus Bug 2.
+  **338 Tests grün** (+10), clippy und fmt sauber.
+
 ---
 
 ## Projektübersicht

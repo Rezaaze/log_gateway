@@ -323,3 +323,58 @@ SWAGGER_UI_DOWNLOAD_URL="file:///pfad/swaggerui.zip" cargo test --workspace --no
 
 Alle Zahlen in diesem Dokument stammen aus Läufen vom 08.09.2026 gegen die
 jeweils genannten Datenquellen.
+
+---
+
+## Nachtrag 08.09.2026 — Bugs 3.1–3.4 behoben
+
+Alle vier in Abschnitt 3 beschriebenen Bugs sind gefixt. Stand danach:
+**338 Tests grün** (vorher 328; +10 neue Regressionstests), `cargo clippy
+--workspace --all-targets` und `cargo fmt --check` sauber.
+
+| Bug | Fix | Regressionstest |
+|---|---|---|
+| 3.1 Kollektor aus `data.id` | `RisData.host` statt `id`, neuer Helper `collector_from_host()` schneidet `.ripe.net` ab | 3 Tests in `tools/bgp_stream`, u. a. gegen ein wörtlich aus dem Live-Stream übernommenes RIS-Frame |
+| 3.2 Baseline-Schlüssel-Mismatch | Ein einziger `propagation::path_hash()` für alle drei bisherigen Kopien; Batch-Builder trägt den **vollen** AS-Pfad ins Event statt `vec![origin_as]` | `test_archive_built_baseline_is_found_by_live_lookup` (Archiv → Builder → save/load → Live-Lookup), `test_batch_and_live_group_keys_agree` |
+| 3.3 Kein Zeitfenster im Batch | Gemeinsame `propagation::build_events_batch()` mit Sessionisierung (Fenster ab erster Ankunft, wie im Live-Aggregator), `--window-secs` in beiden Tools, Default 10 s | `test_build_events_batch_splits_on_window`, `_preserves_full_as_path`, `_separates_distinct_paths`, `_drops_below_min_collectors` |
+| 3.4 Build lädt von github.com | `utoipa-swagger-ui` mit `vendored`-Feature; zusätzlich `target-cpu=native` aus `.cargo/config.toml` entfernt (siehe unten) | Build läuft in dieser Umgebung ohne Workaround durch |
+
+**Zusätzlich gefunden beim Fixen von 3.4:** `.cargo/config.toml` setzte
+`-C target-cpu=native` unbedingt. In dieser VM meldet CPUID AVX-512, der
+Hypervisor stellt es aber nicht bereit — der Build bricht mit **SIGILL** im
+Build-Script einer Dependency ab. Dasselbe Muster trifft den Release-Pfad: der
+GitHub-Actions-Runner backt seine CPU-Features in ein Binary, das anschließend
+auf einem anderen Host läuft. Das Flag ist jetzt opt-in
+(`RUSTFLAGS="-C target-cpu=native" cargo build --release` auf einem Build-Host,
+auf dem Build- und Laufzeit-Maschine identisch sind).
+
+**Zusätzlich eingebaut:** `WaveAnomalyDetector` zählt jetzt Baseline-Treffer
+und -Fehlschläge (`baseline_coverage()`), und `DetectorRunner` loggt einmalig
+einen Fehler, wenn eine geladene Baseline nach 1000 Events kein einziges Mal
+gematcht hat. Genau dieses stille Zurückfallen auf `Normal` hatte Bug 3.2
+monatelang unsichtbar gemacht.
+
+### Gegen echte Daten verifiziert
+
+`tools/baseline_builder` gegen dieselben RIS-Archivdaten wie oben
+(5 Kollektoren, 01.01.2024, 14,4 MB, 5897 Events):
+
+```
+vorher:  max_spread_ms bis 293.000 (Ankündigungen 5 Minuten auseinander verschmolzen)
+nachher: max_spread_ms p50 = 8.000, max = 10.000, Einträge über dem 10-s-Fenster: 0
+```
+
+### Was die Fixes nicht ändern
+
+Die Messergebnisse aus Abschnitt 2 bleiben unverändert gültig. Die Bugfixes
+machen die Pipeline **korrekt**, nicht die Hypothese **richtig**:
+
+- Die Archive haben weiterhin Sekunden-Auflösung — der neue Baseline-Lauf zeigt
+  das direkt (p50 der Spreads = 8000 ms, Vielfache von 1000).
+- Der Anteil messbarer Ankündigungen (~3,5 %) und die Sättigung von
+  `collector_gap_ratio` und `propagation_speed` sind unberührt.
+
+Die Empfehlung aus Abschnitt 5 gilt also unverändert: erst den RPKI/IRR-Pfad
+live messen, und die Wellenphysik über das beschriebene 7-Tage-Experiment
+entscheiden — das jetzt überhaupt erst aussagekräftig durchführbar ist, weil
+der Kollektor-Bug (3.1) vorher jede Live-Messung wertlos gemacht hätte.

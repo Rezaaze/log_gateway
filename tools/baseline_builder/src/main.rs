@@ -24,10 +24,10 @@
 use anyhow::Result;
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use log_gateway::propagation::PropagationEvent;
+use log_gateway::propagation::{build_events_batch, CollectorObservation, PropagationEvent};
 use log_gateway::wave_baseline::{is_good_route, BaselineBuilder};
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use walkdir::WalkDir;
@@ -55,6 +55,14 @@ struct Args {
     /// geeignet, nur für einen ersten Funktionsnachweis.
     #[arg(long, default_value_t = 30)]
     min_samples: usize,
+
+    /// Zeitfenster in Sekunden, innerhalb dessen Ankünfte verschiedener
+    /// Kollektoren als dieselbe Ankündigung gelten — identisch zum
+    /// Live-`PropagationAggregator`. Ohne Fenster verschmelzen zeitlich
+    /// unabhängige Ankündigungen desselben Präfixes zu einem "Ereignis"
+    /// (auf echten Archivdaten bis zu 293 s Spread gemessen).
+    #[arg(long, default_value_t = 10.0)]
+    window_secs: f64,
 }
 
 /// Einfacher Schlüssel für das Zusammenführen über Kollektoren
@@ -105,60 +113,27 @@ fn parse_mrt_file(path: &Path, collector: &str) -> Vec<MrtRecord> {
     records
 }
 
-/// Gruppiert Records nach (prefix, origin_as, path_hash) und baut PropagationEvents.
-fn build_events(records: Vec<MrtRecord>, min_collectors: usize) -> Vec<PropagationEvent> {
-    // Zwischenspeicher: GroupKey → Map<collector, timestamp>
-    // Für gleiche Announcements von verschiedenen Kollektoren innerhalb ±30s
-    let mut groups: HashMap<(String, u32, u64), BTreeMap<String, f64>> = HashMap::new();
-
-    for record in records {
-        // path_hash: gleicher Algorithmus wie GroupKey::from_record()
-        let path_hash: u64 = record.as_path.iter().fold(0u64, |acc, &asn| {
-            acc.wrapping_mul(31).wrapping_add(asn as u64)
-        });
-        let key = (record.prefix.clone(), record.origin_as, path_hash);
-        let entry = groups.entry(key).or_default();
-        // Behalte frühesten Timestamp pro Kollektor (falls Duplikate)
-        entry
-            .entry(record.collector.clone())
-            .and_modify(|t| {
-                if record.timestamp < *t {
-                    *t = record.timestamp;
-                }
-            })
-            .or_insert(record.timestamp);
-    }
-
-    // Konvertiere Gruppen mit genug Kollektoren in PropagationEvents
-    let mut events = Vec::new();
-    for ((prefix_str, origin_as, _), arrivals) in groups {
-        if arrivals.len() < min_collectors {
-            continue;
-        }
-        let prefix = match prefix_str.parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let first = arrivals.values().copied().fold(f64::INFINITY, f64::min);
-        let last = arrivals.values().copied().fold(f64::NEG_INFINITY, f64::max);
-        let mut order: Vec<String> = arrivals.keys().cloned().collect();
-        order.sort_by(|a, b| arrivals[a].partial_cmp(&arrivals[b]).unwrap());
-
-        // AS-Pfad aus erstem Arrival rekonstruieren (näherungsweise)
-        let as_path = vec![origin_as]; // Vereinfachung für Batch-Verarbeitung
-
-        events.push(PropagationEvent {
-            prefix,
-            origin_as,
-            as_path,
-            arrivals,
-            first_arrival: first,
-            last_arrival: last,
-            spread_ms: (last - first) * 1000.0,
-            arrival_order: order,
-        });
-    }
-    events
+/// Baut PropagationEvents aus MRT-Records — delegiert an die gemeinsame
+/// Implementierung in `log_gateway::propagation`, damit Batch- und Live-Pfad
+/// dieselbe Gruppierung, dasselbe Zeitfenster und denselben AS-Pfad-Hash
+/// verwenden. Zwei getrennte Kopien dieser Logik waren die Ursache dafür, dass
+/// offline gebaute Baselines vom Live-Detektor nie gefunden wurden.
+fn build_events(
+    records: Vec<MrtRecord>,
+    min_collectors: usize,
+    window_secs: f64,
+) -> Vec<PropagationEvent> {
+    let observations = records
+        .into_iter()
+        .map(|r| CollectorObservation {
+            collector: r.collector,
+            prefix: r.prefix,
+            origin_as: r.origin_as,
+            as_path: r.as_path,
+            timestamp: r.timestamp,
+        })
+        .collect();
+    build_events_batch(observations, window_secs, min_collectors)
 }
 
 fn main() -> Result<()> {
@@ -245,7 +220,7 @@ fn main() -> Result<()> {
             .collect();
 
         // PropagationEvents aus gemergten Records bauen
-        let events = build_events(all_records, args.min_collectors);
+        let events = build_events(all_records, args.min_collectors, args.window_secs);
 
         for event in &events {
             total_events += 1;

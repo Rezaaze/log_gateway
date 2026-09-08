@@ -38,11 +38,10 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use log_gateway::propagation::PropagationEvent;
+use log_gateway::propagation::{build_events_batch, CollectorObservation, PropagationEvent};
 use log_gateway::wave_anomaly_detector::{AnomalyClassification, WaveAnomalyDetector};
 use log_gateway::wave_baseline::WaveBaseline;
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -57,6 +56,14 @@ struct Args {
     /// considered (same rationale as baseline_builder / is_good_route)
     #[arg(long, default_value_t = 3)]
     min_collectors: usize,
+
+    /// Time window in seconds within which arrivals at different collectors
+    /// count as the same announcement — identical to the live
+    /// `PropagationAggregator`. Without a window, independent announcements of
+    /// the same prefix merge into a single "event" (spreads of up to 293 s
+    /// measured on real RIS archive data).
+    #[arg(long, default_value_t = 10.0)]
+    window_secs: f64,
 }
 
 /// Describes one known-hijack backtest case. Every field here is data the
@@ -135,42 +142,27 @@ fn parse_mrt_file(path: &Path, collector: &str) -> Vec<MrtRecord> {
     records
 }
 
-/// Same grouping convention as tools/baseline_builder::build_events — the
-/// (prefix, origin_as, path_hash) key must match so a case's hijack events
-/// (grouped under the hijacker's origin_as) and legitimate events (grouped
-/// under the real origin_as) come out as distinct PropagationEvents.
-fn build_events(records: Vec<MrtRecord>, min_collectors: usize) -> Vec<PropagationEvent> {
-    let mut groups: HashMap<(String, u32, u64), BTreeMap<String, f64>> = HashMap::new();
-
-    for record in records {
-        let path_hash: u64 = record.as_path.iter().fold(0u64, |acc, &asn| {
-            acc.wrapping_mul(31).wrapping_add(asn as u64)
-        });
-        let key = (record.prefix.clone(), record.origin_as, path_hash);
-        let entry = groups.entry(key).or_default();
-        entry
-            .entry(record.collector.clone())
-            .and_modify(|t| {
-                if record.timestamp < *t {
-                    *t = record.timestamp;
-                }
-            })
-            .or_insert(record.timestamp);
-    }
-
-    let mut events = Vec::new();
-    for ((prefix_str, origin_as, _), arrivals) in groups {
-        if arrivals.len() < min_collectors {
-            continue;
-        }
-        let prefix = match prefix_str.parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let as_path = vec![origin_as]; // approximation, same as baseline_builder
-        events.push(PropagationEvent::new(prefix, origin_as, as_path, arrivals));
-    }
-    events
+/// Builds PropagationEvents from MRT records — delegates to the shared
+/// implementation in `log_gateway::propagation` so batch and live paths use
+/// the same grouping, the same time window and the same AS-path hash. Two
+/// divergent copies of this logic were why offline-built baselines were never
+/// found by the live detector.
+fn build_events(
+    records: Vec<MrtRecord>,
+    min_collectors: usize,
+    window_secs: f64,
+) -> Vec<PropagationEvent> {
+    let observations = records
+        .into_iter()
+        .map(|r| CollectorObservation {
+            collector: r.collector,
+            prefix: r.prefix,
+            origin_as: r.origin_as,
+            as_path: r.as_path,
+            timestamp: r.timestamp,
+        })
+        .collect();
+    build_events_batch(observations, window_secs, min_collectors)
 }
 
 #[derive(Debug, Default)]
@@ -310,7 +302,7 @@ fn main() -> Result<()> {
     }
     eprintln!("Parsed {} raw BGP records", all_records.len());
 
-    let events = build_events(all_records, args.min_collectors);
+    let events = build_events(all_records, args.min_collectors, args.window_secs);
     eprintln!(
         "Built {} PropagationEvents (>= {} collectors each)",
         events.len(),

@@ -110,6 +110,9 @@ pub struct DetectorRunner {
     /// Aggregates per-collector arrivals into PropagationEvents for
     /// wave-physics anomaly scoring
     propagation_aggregator: Arc<PropagationAggregator>,
+    /// Set once the "baseline never matched anything" warning has been
+    /// emitted, so it is logged once per process instead of per event.
+    wave_baseline_warning_sent: Arc<std::sync::atomic::AtomicBool>,
     /// Wave anomaly detector — scores completed PropagationEvents against a
     /// baseline (optional; without a baseline it never raises anomalies)
     wave_detector: Option<Arc<WaveAnomalyDetector>>,
@@ -179,6 +182,7 @@ impl DetectorRunner {
             irr_cache: None,
             escalation_router: None,
             propagation_aggregator: Arc::new(PropagationAggregator::new()),
+            wave_baseline_warning_sent: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             wave_detector: None,
         }
     }
@@ -196,6 +200,7 @@ impl DetectorRunner {
             irr_cache: None,
             escalation_router: None,
             propagation_aggregator: Arc::new(PropagationAggregator::new()),
+            wave_baseline_warning_sent: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             wave_detector: None,
         }
     }
@@ -213,6 +218,7 @@ impl DetectorRunner {
             irr_cache: Some(irr),
             escalation_router: None,
             propagation_aggregator: Arc::new(PropagationAggregator::new()),
+            wave_baseline_warning_sent: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             wave_detector: None,
         }
     }
@@ -454,6 +460,7 @@ impl DetectorRunner {
             return;
         };
         let score = wave_detector.score_event(event);
+        self.warn_if_baseline_never_matches(wave_detector);
         if score.classification == AnomalyClassification::Normal {
             return;
         }
@@ -490,6 +497,30 @@ impl DetectorRunner {
 
         if let Some(router) = &self.escalation_router {
             router.route(&anomaly).await;
+        }
+    }
+
+    /// Warns once when a loaded wave baseline has never matched a single
+    /// scored event. Without this the detector reports "no anomalies" whether
+    /// it is working or looking events up under a key the baseline was never
+    /// written with — which is exactly how a key mismatch between
+    /// `tools/baseline_builder` and the live lookup went unnoticed.
+    fn warn_if_baseline_never_matches(&self, detector: &WaveAnomalyDetector) {
+        const REPORT_AFTER: u64 = 1_000;
+        if !detector.has_baseline() || self.wave_baseline_warning_sent.load(Ordering::Relaxed) {
+            return;
+        }
+        let (hits, misses) = detector.baseline_coverage();
+        if hits == 0 && misses >= REPORT_AFTER {
+            self.wave_baseline_warning_sent
+                .store(true, Ordering::Relaxed);
+            tracing::error!(
+                scored_events = misses,
+                "Wave baseline is loaded but has not matched a single event — the \
+                 detector is scoring everything as Normal without measuring anything. \
+                 Check that the baseline was built for these prefixes and that \
+                 tools/baseline_builder and the live path agree on the group key."
+            );
         }
     }
 

@@ -1,5 +1,7 @@
 //! Wave Anomaly Detector
 
+// Shared with the baseline builder — see `propagation::path_hash`.
+use crate::propagation::path_hash as calculate_path_hash;
 use crate::propagation::PropagationEvent;
 use crate::wave_baseline::{z_score, WaveBaseline, WaveBaselineEntry};
 use serde::{Deserialize, Serialize};
@@ -75,6 +77,14 @@ impl Default for AnomalyDetectorConfig {
 pub struct WaveAnomalyDetector {
     baseline: Option<WaveBaseline>,
     config: AnomalyDetectorConfig,
+    /// Events scored against a matching baseline entry.
+    baseline_hits: std::sync::atomic::AtomicU64,
+    /// Events for which no baseline entry existed, so the detector returned
+    /// `Normal` without measuring anything. Tracked because a detector that
+    /// silently scores everything as normal looks exactly like a detector
+    /// that finds nothing wrong — the failure mode that hid a key mismatch
+    /// between the offline baseline builder and this lookup.
+    baseline_misses: std::sync::atomic::AtomicU64,
 }
 
 impl WaveAnomalyDetector {
@@ -95,6 +105,8 @@ impl WaveAnomalyDetector {
         Ok(Self {
             baseline,
             config: AnomalyDetectorConfig::default(),
+            baseline_hits: std::sync::atomic::AtomicU64::new(0),
+            baseline_misses: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -104,13 +116,16 @@ impl WaveAnomalyDetector {
     }
 
     pub fn score_event(&self, event: &PropagationEvent) -> AnomalyScore {
+        use std::sync::atomic::Ordering;
         if let Some(ref baseline) = self.baseline {
             let key = format!("{}", event.prefix);
             let origin_as = event.origin_as;
             let as_path_hash = calculate_path_hash(&event.as_path);
             if let Some(entry) = baseline.find_entry(&key, origin_as, as_path_hash) {
+                self.baseline_hits.fetch_add(1, Ordering::Relaxed);
                 return self.calculate_score_for_entry(event, entry);
             }
+            self.baseline_misses.fetch_add(1, Ordering::Relaxed);
         }
         AnomalyScore {
             total_score: 0.0,
@@ -163,6 +178,24 @@ impl WaveAnomalyDetector {
         self.score_event(event).total_score >= threshold
     }
 
+    /// `(hits, misses)` — how many scored events found a baseline entry and
+    /// how many did not. All-misses means the detector is running but
+    /// measuring nothing; callers should surface that rather than report
+    /// "no anomalies".
+    pub fn baseline_coverage(&self) -> (u64, u64) {
+        use std::sync::atomic::Ordering;
+        (
+            self.baseline_hits.load(Ordering::Relaxed),
+            self.baseline_misses.load(Ordering::Relaxed),
+        )
+    }
+
+    /// True when a baseline is loaded (as opposed to the detector running
+    /// without one, where returning `Normal` is expected).
+    pub fn has_baseline(&self) -> bool {
+        self.baseline.is_some()
+    }
+
     pub fn warning_threshold(&self) -> f64 {
         0.3
     }
@@ -170,12 +203,6 @@ impl WaveAnomalyDetector {
     pub fn critical_threshold(&self) -> f64 {
         0.6
     }
-}
-
-fn calculate_path_hash(as_path: &[u32]) -> u64 {
-    as_path.iter().fold(0u64, |acc, &asn| {
-        acc.wrapping_mul(31).wrapping_add(asn as u64)
-    })
 }
 
 fn calculate_gap_ratio(event: &PropagationEvent) -> f64 {
@@ -279,6 +306,134 @@ impl Default for Signals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A loaded baseline that never matches must be observable, not silent.
+    #[test]
+    fn test_baseline_coverage_counts_hits_and_misses() {
+        use crate::wave_baseline::{WaveBaseline, WaveBaselineEntry};
+
+        let as_path = vec![64496u32, 15169];
+        let mut baseline = WaveBaseline::new("test");
+        baseline.extend(vec![WaveBaselineEntry {
+            prefix: "8.8.8.0/24".to_string(),
+            origin_as: 15169,
+            as_path_hash: calculate_path_hash(&as_path),
+            sample_count: 40,
+            min_spread_ms: 10.0,
+            p50_spread_ms: 100.0,
+            p95_spread_ms: 300.0,
+            p99_spread_ms: 400.0,
+            max_spread_ms: 500.0,
+            std_dev: 50.0,
+            expected_order: vec!["rrc00".to_string(), "rrc11".to_string()],
+        }]);
+
+        let dir = std::env::temp_dir().join(format!("wave_coverage_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("baseline.bin.zst");
+        baseline.save(&path).unwrap();
+        let detector = WaveAnomalyDetector::new(Some(&path)).unwrap();
+        assert!(detector.has_baseline());
+
+        let mut arrivals = std::collections::BTreeMap::new();
+        arrivals.insert("rrc00".to_string(), 1000.0);
+        arrivals.insert("rrc11".to_string(), 1000.2);
+
+        let known = PropagationEvent::new(
+            "8.8.8.0/24".parse().unwrap(),
+            15169,
+            as_path,
+            arrivals.clone(),
+        );
+        detector.score_event(&known);
+        assert_eq!(detector.baseline_coverage(), (1, 0));
+
+        // Same prefix, different AS path — no entry for this group.
+        let unknown = PropagationEvent::new(
+            "8.8.8.0/24".parse().unwrap(),
+            15169,
+            vec![1, 2, 3, 15169],
+            arrivals,
+        );
+        detector.score_event(&unknown);
+        assert_eq!(detector.baseline_coverage(), (1, 1));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// End-to-end regression for the bug that made the wave detector dead in
+    /// production: `tools/baseline_builder` built its events with a truncated
+    /// `vec![origin_as]` AS path, so baseline entries were keyed by
+    /// `hash([origin_as])` while `score_event` looks entries up by the hash of
+    /// the *full* path. `find_entry` therefore never matched a live event and
+    /// the detector silently returned `Normal` for everything.
+    ///
+    /// Path: archive observations -> build_events_batch -> BaselineBuilder ->
+    /// save/load -> score_event. The looked-up entry must be found.
+    #[test]
+    fn test_archive_built_baseline_is_found_by_live_lookup() {
+        use crate::propagation::{build_events_batch, CollectorObservation};
+        use crate::wave_baseline::BaselineBuilder;
+
+        let as_path = vec![64496u32, 64497, 15169];
+        let mut observations = Vec::new();
+        // 5 separate announcements, each seen by 3 collectors, 60 s apart so
+        // the window splits them into 5 distinct events.
+        for i in 0..5 {
+            let base = 1_700_000_000.0 + (i as f64) * 60.0;
+            for (n, collector) in ["rrc00", "rrc11", "rrc12"].iter().enumerate() {
+                observations.push(CollectorObservation {
+                    collector: collector.to_string(),
+                    prefix: "8.8.8.0/24".to_string(),
+                    origin_as: 15169,
+                    as_path: as_path.clone(),
+                    timestamp: base + (n as f64) * 0.1,
+                });
+            }
+        }
+
+        let events = build_events_batch(observations, 10.0, 3);
+        assert_eq!(events.len(), 5, "expected one event per announcement");
+
+        let mut builder = BaselineBuilder::new().with_min_samples(5);
+        for event in &events {
+            builder.add_event(event);
+        }
+        let baseline = builder.build();
+        assert_eq!(baseline.len(), 1, "expected one baseline entry");
+
+        let dir =
+            std::env::temp_dir().join(format!("wave_baseline_roundtrip_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("baseline.bin.zst");
+        baseline.save(&path).unwrap();
+
+        let detector = WaveAnomalyDetector::new(Some(&path)).unwrap();
+
+        // A live event carries the full AS path — the exact case that used to
+        // miss. Its spread is far outside the baseline, so a found entry must
+        // produce a non-zero score; a missed entry returns exactly 0.0.
+        let mut arrivals = std::collections::BTreeMap::new();
+        arrivals.insert("rrc00".to_string(), 2_000_000_000.0);
+        arrivals.insert("rrc11".to_string(), 2_000_000_005.0);
+        arrivals.insert("rrc12".to_string(), 2_000_000_009.0);
+        let live_event = crate::propagation::PropagationEvent::new(
+            "8.8.8.0/24".parse().unwrap(),
+            15169,
+            as_path,
+            arrivals,
+        );
+
+        let score = detector.score_event(&live_event);
+        assert!(
+            score.total_score > 0.0,
+            "baseline entry was not found by the live lookup — batch and live \
+             keying have diverged again (score: {:?})",
+            score
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
     use std::collections::BTreeMap;
 
     fn make_test_event(spread_ms: f64, num_collectors: usize) -> PropagationEvent {

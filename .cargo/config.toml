@@ -1,5 +1,19 @@
-# Build configuration for production Linux x86_64 servers.
-# Enables AVX2/SSE4.2 instructions — build and run on the same machine class.
-# Set via environment variable on the CI/CD build host instead if cross-compiling.
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=native"]
+# Build configuration.
+#
+# `-C target-cpu=native` was previously set here unconditionally. It is now
+# opt-in, for two reasons:
+#
+#  1. It bakes the *build* machine's CPU features into the binary. The release
+#     path builds in GitHub Actions and runs on a different host, so the
+#     runner's feature set (AVX-512 etc.) can be illegal on the target machine.
+#  2. Virtualised builders can advertise features via CPUID that the hypervisor
+#     does not actually enable. Building this repo in such a VM aborts with
+#     SIGILL (illegal instruction) inside a dependency's build script — the
+#     build fails before a line of this project's code is compiled.
+#
+# Enable it explicitly on a build host where build machine == run machine:
+#
+#     RUSTFLAGS="-C target-cpu=native" cargo build --release
+#
+# [target.x86_64-unknown-linux-gnu]
+# rustflags = ["-C", "target-cpu=native"]

@@ -1,5 +1,9 @@
 //! Wave Baseline – Historische Propagationsverteilungen
 
+// The single shared AS-path hash: baseline entries must be keyed exactly the
+// way `WaveAnomalyDetector` looks them up, or offline-built baselines are
+// invisible to the live detector.
+use crate::propagation::path_hash;
 use anyhow::{Context, Result};
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
@@ -204,15 +208,6 @@ impl WaveBaseline {
 /// holding a `WaveBaseline` directly.
 pub fn save_baseline(baseline: &WaveBaseline, path: &Path) -> Result<()> {
     baseline.save(path)
-}
-
-/// Same polynomial hash used by `PropagationEvent`/`WaveAnomalyDetector` to
-/// key baseline entries by AS path — must stay identical across all three
-/// so a live-path lookup matches what the offline builder produced.
-fn path_hash(as_path: &[u32]) -> u64 {
-    as_path.iter().fold(0u64, |acc, &asn| {
-        acc.wrapping_mul(31).wrapping_add(asn as u64)
-    })
 }
 
 /// (prefix, origin_as, as_path_hash) — the grouping key `BaselineBuilder`

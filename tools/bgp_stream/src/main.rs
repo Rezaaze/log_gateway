@@ -161,7 +161,12 @@ struct RisMessage {
 #[derive(Deserialize, Debug)]
 struct RisData {
     timestamp: Option<f64>,
-    id: Option<String>,       // collector name, e.g. "rrc12"
+    /// Collector hostname as sent by RIS Live, e.g. "rrc12.ripe.net".
+    /// NOT `id` — that field is a per-message identifier
+    /// ("80.81.196.197-01a0819950b60000"), unique for every single update,
+    /// and using it as the collector name made every record look like it
+    /// came from its own collector.
+    host: Option<String>,
     peer_asn: Option<Value>,  // can be string or number
     path: Option<Vec<Value>>, // can be nested (AS-sets)
     announcements: Option<Vec<Announcement>>,
@@ -194,6 +199,16 @@ fn flatten_path(path: &[Value]) -> Vec<u64> {
             _ => asn_to_u64(v),
         })
         .collect()
+}
+
+/// Maps a RIS Live `host` field ("rrc12.ripe.net") to the bare collector id
+/// ("rrc12") that `collector_registry` and the propagation aggregator expect.
+/// Returns "unknown" when the field is missing or empty.
+fn collector_from_host(host: Option<&str>) -> String {
+    match host {
+        Some(h) if !h.is_empty() => h.split('.').next().unwrap_or("unknown").to_string(),
+        _ => "unknown".to_string(),
+    }
 }
 
 fn process_ris_data(
@@ -467,14 +482,14 @@ async fn bgp_stream_task(
                     match serde_json::from_str::<RisMessage>(&text) {
                         Ok(ris_msg) if ris_msg.msg_type == "ris_message" => {
                             if let Some(data) = &ris_msg.data {
-                                let collector = data.id.as_deref().unwrap_or("unknown");
+                                let collector = collector_from_host(data.host.as_deref());
                                 process_ris_data(
                                     data,
                                     &known,
                                     &tx,
                                     &stats,
                                     cfg.sample_rate,
-                                    collector,
+                                    &collector,
                                 );
                             }
                         }
@@ -664,4 +679,41 @@ async fn main() {
 
     // Run WebSocket stream (reconnects forever)
     bgp_stream_task(tx, cfg, stats, known).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collector_from_host_strips_domain() {
+        assert_eq!(collector_from_host(Some("rrc12.ripe.net")), "rrc12");
+        assert_eq!(collector_from_host(Some("rrc00.ripe.net")), "rrc00");
+    }
+
+    #[test]
+    fn test_collector_from_host_missing_or_empty() {
+        assert_eq!(collector_from_host(None), "unknown");
+        assert_eq!(collector_from_host(Some("")), "unknown");
+    }
+
+    /// Regression test for the bug this replaced: the collector used to be
+    /// read from `data.id`, which is a per-message identifier. A real RIS
+    /// Live frame must yield "rrc12", not the message id.
+    #[test]
+    fn test_ris_data_parses_collector_from_host_not_id() {
+        let raw = r#"{
+            "timestamp": 1788880703.670,
+            "peer": "80.81.196.197",
+            "peer_asn": "58299",
+            "id": "80.81.196.197-01a0819950b60000",
+            "host": "rrc12.ripe.net",
+            "type": "UPDATE",
+            "path": [58299, 174, 16509],
+            "announcements": [{"next_hop": "80.81.196.197", "prefixes": ["130.137.231.0/24"]}],
+            "withdrawals": []
+        }"#;
+        let data: RisData = serde_json::from_str(raw).expect("valid RIS frame");
+        assert_eq!(collector_from_host(data.host.as_deref()), "rrc12");
+    }
 }

@@ -16,14 +16,10 @@ pub struct GroupKey {
 
 impl GroupKey {
     pub fn from_record(record: &crate::nats_subscriber::BgpRecord) -> Self {
-        // path_hash: einfacher Polynomial-Hash über as_path Vec<u32>
-        let path_hash = record.as_path.iter().fold(0u64, |acc, &asn| {
-            acc.wrapping_mul(31).wrapping_add(asn as u64)
-        });
         Self {
             prefix: record.prefix.clone(),
             origin_as: record.origin_as,
-            path_hash,
+            path_hash: path_hash(&record.as_path),
         }
     }
 }
@@ -92,6 +88,120 @@ impl PropagationEvent {
             arrival_order,
         }
     }
+}
+
+/// Polynomial hash over an AS path. **The one definition** — every place that
+/// keys a propagation group, a baseline entry or a detector lookup by AS path
+/// must call this, so a baseline written by one code path is findable by
+/// another. (Three separate copies of this hash previously existed; combined
+/// with `tools/baseline_builder` storing a truncated `vec![origin_as]` path,
+/// baselines were written under a different key than the live detector looked
+/// them up under, so live lookups silently never matched.)
+pub fn path_hash(as_path: &[u32]) -> u64 {
+    as_path.iter().fold(0u64, |acc, &asn| {
+        acc.wrapping_mul(31).wrapping_add(asn as u64)
+    })
+}
+
+/// One observation of an announcement at a single collector — the input unit
+/// for building `PropagationEvent`s from archive (MRT) data.
+#[derive(Debug, Clone)]
+pub struct CollectorObservation {
+    pub collector: String,
+    pub prefix: String,
+    pub origin_as: u32,
+    pub as_path: Vec<u32>,
+    pub timestamp: f64,
+}
+
+/// Builds `PropagationEvent`s from archive observations using the same
+/// semantics as the live `PropagationAggregator`: a group is opened by its
+/// first arrival and stays open for `window_secs`; a later observation of the
+/// same (prefix, origin_as, as_path) starts a *new* group.
+///
+/// The time window is what makes the result physically meaningful. Without it
+/// (as the batch tools previously did) every announcement of a prefix across
+/// the whole dataset collapses into one "propagation event", producing spreads
+/// of minutes — measured at up to 293 s on real RIS archive data — from
+/// announcements that have nothing to do with each other.
+///
+/// The full `as_path` is carried into the event, not a `vec![origin_as]`
+/// stand-in: the path is part of the baseline key the live detector looks up.
+pub fn build_events_batch(
+    mut observations: Vec<CollectorObservation>,
+    window_secs: f64,
+    min_collectors: usize,
+) -> Vec<PropagationEvent> {
+    // Chronological order — sessionization needs to see arrivals in the order
+    // they happened, and MRT files are read per collector, not interleaved.
+    observations.sort_by(|a, b| {
+        a.timestamp
+            .partial_cmp(&b.timestamp)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    struct OpenGroup {
+        first_ts: f64,
+        as_path: Vec<u32>,
+        arrivals: BTreeMap<String, f64>,
+    }
+
+    let mut open: std::collections::HashMap<(String, u32, u64), OpenGroup> =
+        std::collections::HashMap::new();
+    let mut events = Vec::new();
+
+    let finish = |key: &(String, u32, u64), group: OpenGroup, out: &mut Vec<PropagationEvent>| {
+        if group.arrivals.len() < min_collectors {
+            return;
+        }
+        if let Ok(prefix) = key.0.parse::<IpNet>() {
+            out.push(PropagationEvent::new(
+                prefix,
+                key.1,
+                group.as_path,
+                group.arrivals,
+            ));
+        }
+    };
+
+    for obs in observations {
+        let key = (obs.prefix.clone(), obs.origin_as, path_hash(&obs.as_path));
+
+        if let Some(group) = open.get_mut(&key) {
+            if obs.timestamp - group.first_ts <= window_secs {
+                group
+                    .arrivals
+                    .entry(obs.collector)
+                    .and_modify(|t| {
+                        if obs.timestamp < *t {
+                            *t = obs.timestamp;
+                        }
+                    })
+                    .or_insert(obs.timestamp);
+                continue;
+            }
+            // Window elapsed — close this group and open a fresh one below.
+            let expired = open.remove(&key).expect("just looked it up");
+            finish(&key, expired, &mut events);
+        }
+
+        let mut arrivals = BTreeMap::new();
+        arrivals.insert(obs.collector, obs.timestamp);
+        open.insert(
+            key,
+            OpenGroup {
+                first_ts: obs.timestamp,
+                as_path: obs.as_path,
+                arrivals,
+            },
+        );
+    }
+
+    for (key, group) in open.drain() {
+        finish(&key, group, &mut events);
+    }
+
+    events
 }
 
 struct PendingGroup {
@@ -245,6 +355,115 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
+
+    fn obs(
+        collector: &str,
+        prefix: &str,
+        origin: u32,
+        path: &[u32],
+        ts: f64,
+    ) -> CollectorObservation {
+        CollectorObservation {
+            collector: collector.to_string(),
+            prefix: prefix.to_string(),
+            origin_as: origin,
+            as_path: path.to_vec(),
+            timestamp: ts,
+        }
+    }
+
+    /// Regression: the batch builders used to group over the whole dataset
+    /// with no time window, so two announcements minutes apart collapsed into
+    /// a single event with a nonsense spread (up to 293 s on real archive
+    /// data). They must come out as two separate events.
+    #[test]
+    fn test_build_events_batch_splits_on_window() {
+        let path = [1u32, 2, 15169];
+        let observations = vec![
+            obs("rrc00", "8.8.8.0/24", 15169, &path, 1000.0),
+            obs("rrc11", "8.8.8.0/24", 15169, &path, 1000.5),
+            obs("rrc12", "8.8.8.0/24", 15169, &path, 1001.0),
+            // 60 s later — a separate announcement, not the same wave.
+            obs("rrc00", "8.8.8.0/24", 15169, &path, 1060.0),
+            obs("rrc11", "8.8.8.0/24", 15169, &path, 1060.4),
+            obs("rrc12", "8.8.8.0/24", 15169, &path, 1060.8),
+        ];
+
+        let mut events = build_events_batch(observations, 10.0, 3);
+        events.sort_by(|a, b| a.first_arrival.partial_cmp(&b.first_arrival).unwrap());
+
+        assert_eq!(events.len(), 2, "60 s apart must not merge into one event");
+        assert!(
+            events[0].spread_ms < 1100.0 && events[1].spread_ms < 1100.0,
+            "each event's spread must stay inside the window, got {:?}",
+            events.iter().map(|e| e.spread_ms).collect::<Vec<_>>()
+        );
+    }
+
+    /// Regression: the batch builders replaced the AS path with
+    /// `vec![origin_as]`, so baseline entries were keyed by a hash the live
+    /// detector never computes. The full path must survive into the event.
+    #[test]
+    fn test_build_events_batch_preserves_full_as_path() {
+        let path = [64496u32, 64497, 15169];
+        let observations = vec![
+            obs("rrc00", "8.8.8.0/24", 15169, &path, 10.0),
+            obs("rrc11", "8.8.8.0/24", 15169, &path, 10.2),
+            obs("rrc12", "8.8.8.0/24", 15169, &path, 10.4),
+        ];
+
+        let events = build_events_batch(observations, 10.0, 3);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].as_path, path.to_vec());
+        assert_eq!(path_hash(&events[0].as_path), path_hash(&path));
+    }
+
+    #[test]
+    fn test_build_events_batch_drops_below_min_collectors() {
+        let path = [1u32, 15169];
+        let observations = vec![
+            obs("rrc00", "8.8.8.0/24", 15169, &path, 10.0),
+            obs("rrc11", "8.8.8.0/24", 15169, &path, 10.2),
+        ];
+        assert!(build_events_batch(observations, 10.0, 3).is_empty());
+    }
+
+    /// Different AS paths for the same prefix are different waves and must not
+    /// share a group — that is what the path component of the key is for.
+    #[test]
+    fn test_build_events_batch_separates_distinct_paths() {
+        let observations = vec![
+            obs("rrc00", "8.8.8.0/24", 15169, &[1, 15169], 10.0),
+            obs("rrc11", "8.8.8.0/24", 15169, &[1, 15169], 10.2),
+            obs("rrc12", "8.8.8.0/24", 15169, &[1, 15169], 10.4),
+            obs("rrc00", "8.8.8.0/24", 15169, &[2, 3, 15169], 10.1),
+            obs("rrc11", "8.8.8.0/24", 15169, &[2, 3, 15169], 10.3),
+            obs("rrc12", "8.8.8.0/24", 15169, &[2, 3, 15169], 10.5),
+        ];
+        assert_eq!(build_events_batch(observations, 10.0, 3).len(), 2);
+    }
+
+    /// The batch path and the live `PropagationAggregator` must key groups
+    /// identically — a baseline built from archives is only useful if the live
+    /// detector looks it up under the same hash.
+    #[test]
+    fn test_batch_and_live_group_keys_agree() {
+        let as_path = vec![64496u32, 64497, 15169];
+        let record = crate::nats_subscriber::BgpRecord {
+            prefix: "8.8.8.0/24".to_string(),
+            origin_as: 15169,
+            as_path: as_path.clone(),
+            timestamp: Utc.timestamp_opt(1000, 0).unwrap(),
+            event_type: "announce".to_string(),
+            collector: "rrc00".to_string(),
+            peer_asn: 1,
+            peer_ip: "192.0.2.1".to_string(),
+        };
+        assert_eq!(
+            GroupKey::from_record(&record).path_hash,
+            path_hash(&as_path)
+        );
+    }
 
     fn make_arrivals(pairs: &[(&str, f64)]) -> BTreeMap<String, f64> {
         pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
