@@ -6,6 +6,7 @@ members = [
     "tools/baseline_builder",
     "tools/backtest",
     "tools/rpki_probe",
+    "tools/asn_report",
 ]
 resolver = "2"
 

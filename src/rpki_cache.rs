@@ -154,6 +154,44 @@ impl RpkiCache {
         Ok(())
     }
 
+    /// Every VRP covering `prefix`, as `(vrp_prefix_len, max_length, asn)`.
+    ///
+    /// `validate()` answers *whether* a route is invalid; this answers *why* —
+    /// which ASN the ROA actually authorises, or what prefix length it allows.
+    /// A report sent to a network operator has to carry that reason, otherwise
+    /// they cannot check the claim against their own records.
+    ///
+    /// Returns an empty vector when no VRP covers the prefix, when the prefix
+    /// does not parse, or while the index is being refreshed.
+    pub fn covering_vrps(&self, prefix: &str) -> Vec<(u8, u8, u32)> {
+        let prefix_network: IpNet = match prefix.parse() {
+            Ok(net) => net,
+            Err(_) => return Vec::new(),
+        };
+        let index = match self.vrp_index.try_read() {
+            Ok(index) => index,
+            Err(_) => return Vec::new(),
+        };
+
+        let prefix_len = prefix_network.prefix_len();
+        let prefix_addr = prefix_network.addr();
+        let mut covering = Vec::new();
+
+        for candidate_len in (0..=prefix_len).rev() {
+            let candidate_net = match IpNet::new(prefix_addr, candidate_len) {
+                Ok(net) => net.trunc(),
+                Err(_) => continue,
+            };
+            let key = (candidate_len, addr_to_u128(candidate_net.network()));
+            if let Some(vrp_list) = index.get(&key) {
+                for &(max_length, asn) in vrp_list {
+                    covering.push((candidate_len, max_length, asn));
+                }
+            }
+        }
+        covering
+    }
+
     /// Validates a BGP announcement against the locally cached VRP index.
     ///
     /// This is a synchronous method that only reads the shared index.
@@ -307,6 +345,28 @@ pub(crate) fn addr_to_u128(addr: std::net::IpAddr) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_covering_vrps_explains_why_a_route_is_invalid() {
+        let cache = RpkiCache::new("http://dummy".to_string());
+        let net: IpNet = "192.0.2.0/24".parse().unwrap();
+        let key = (net.prefix_len(), addr_to_u128(net.network()));
+        // ROA: 192.0.2.0/24, maxLength 24, authorised for AS64512
+        cache
+            .set_test_data(HashMap::from([(key, vec![(24u8, 64512u32)])]))
+            .await;
+
+        // A different AS announcing it is InvalidAsn — and the report must be
+        // able to name the AS the ROA actually authorises.
+        assert_eq!(
+            cache.validate("192.0.2.0/24", 65000),
+            RpkiStatus::InvalidAsn
+        );
+        assert_eq!(cache.covering_vrps("192.0.2.0/24"), vec![(24, 24, 64512)]);
+
+        // Nothing covers an unrelated prefix.
+        assert!(cache.covering_vrps("198.51.100.0/24").is_empty());
+    }
 
     /// A public rpki-client feed (e.g. https://rpki.cloudflare.com/rpki.json)
     /// emits `asn` as a bare number; Routinator emits it as a string. Both
