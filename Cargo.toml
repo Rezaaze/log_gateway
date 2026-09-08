@@ -5,6 +5,7 @@ members = [
     "tools/mrt_replay",
     "tools/baseline_builder",
     "tools/backtest",
+    "tools/rpki_probe",
 ]
 resolver = "2"
 
