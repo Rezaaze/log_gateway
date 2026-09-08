@@ -28,6 +28,7 @@ pub struct RpkiCache {
     vrp_index: Arc<RwLock<VrpIndex>>,
     client: reqwest::Client,
     routinator_url: String,
+    refresh_interval: Duration,
 }
 
 impl RpkiCache {
@@ -46,7 +47,16 @@ impl RpkiCache {
             vrp_index: Arc::new(RwLock::new(HashMap::new())),
             client,
             routinator_url,
+            refresh_interval: Duration::from_secs(600),
         }
+    }
+
+    /// Overrides the refresh interval (default: 10 minutes). Public VRP feeds
+    /// are a ~100 MB download each time and are operated by third parties —
+    /// poll those hourly or slower.
+    pub fn with_refresh_interval(mut self, interval: Duration) -> Self {
+        self.refresh_interval = interval;
+        self
     }
 
     /// Starts a background task that periodically fetches the VRP dump from Routinator.
@@ -56,9 +66,10 @@ impl RpkiCache {
         let vrp_index = Arc::clone(&self.vrp_index);
         let client = self.client.clone();
         let routinator_url = self.routinator_url.clone();
+        let refresh_interval = self.refresh_interval;
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(600)); // 10 minutes
+            let mut interval = tokio::time::interval(refresh_interval);
 
             // First load with exponential backoff until successful
             let mut backoff_secs = 5u64;
@@ -94,8 +105,7 @@ impl RpkiCache {
         client: &reqwest::Client,
         routinator_url: &str,
     ) -> Result<(), anyhow::Error> {
-        // Routinator 0.15+ uses /json (with metadata+roas wrapper)
-        let url = format!("{}/json", routinator_url);
+        let url = vrp_endpoint_url(routinator_url);
         let response = client.get(&url).send().await?;
 
         if !response.status().is_success() {
@@ -118,8 +128,8 @@ impl RpkiCache {
                 }
             };
 
-            // Parse ASN string (format "AS64512") into u32
-            let asn = match parse_asn(&raw.asn) {
+            // Accepts both "AS64512"/"64512" (Routinator) and 64512 (rpki-client)
+            let asn = match raw.asn.to_u32() {
                 Ok(asn) => asn,
                 Err(e) => {
                     tracing::warn!("Skipping invalid ASN '{}': {}", raw.asn, e);
@@ -220,13 +230,59 @@ struct RoutinatorResponse {
     roas: Vec<RawVrp>,
 }
 
-/// Raw VRP as returned by Routinator's /json endpoint.
+/// Raw VRP as returned by a VRP JSON endpoint.
 #[derive(Debug, Deserialize)]
 struct RawVrp {
     prefix: String,
     #[serde(rename = "maxLength")]
     max_length: u8,
-    asn: String,
+    asn: RawAsn,
+}
+
+/// The `asn` field is spelled differently by different VRP publishers:
+/// Routinator emits a string (`"AS13335"`, sometimes `"13335"`), while
+/// rpki-client-based feeds — including the public one at
+/// `https://rpki.cloudflare.com/rpki.json` — emit a bare JSON number
+/// (`13335`). Accepting both lets the same code run against a self-hosted
+/// validator and a public feed without a second parser.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawAsn {
+    Number(u32),
+    Text(String),
+}
+
+impl RawAsn {
+    fn to_u32(&self) -> Result<u32, anyhow::Error> {
+        match self {
+            RawAsn::Number(n) => Ok(*n),
+            RawAsn::Text(s) => parse_asn(s),
+        }
+    }
+}
+
+impl std::fmt::Display for RawAsn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RawAsn::Number(n) => write!(f, "{}", n),
+            RawAsn::Text(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+/// Builds the VRP JSON URL from the configured base.
+///
+/// A self-hosted Routinator is configured by its base address
+/// (`http://routinator:8323`) and serves the dump under `/json`. A public
+/// feed is configured by its full URL (`https://rpki.cloudflare.com/rpki.json`)
+/// and must be used verbatim — appending `/json` to it would 404.
+fn vrp_endpoint_url(configured: &str) -> String {
+    let trimmed = configured.trim_end_matches('/');
+    if trimmed.ends_with(".json") {
+        trimmed.to_string()
+    } else {
+        format!("{}/json", trimmed)
+    }
 }
 
 /// Parses an ASN string like "AS64512" or "64512" into a u32.
@@ -251,6 +307,45 @@ pub(crate) fn addr_to_u128(addr: std::net::IpAddr) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A public rpki-client feed (e.g. https://rpki.cloudflare.com/rpki.json)
+    /// emits `asn` as a bare number; Routinator emits it as a string. Both
+    /// must parse, so the detector can run against a public feed with no
+    /// self-hosted validator.
+    #[test]
+    fn test_parses_numeric_and_string_asn() {
+        let cloudflare = r#"{"roas":[{"asn":13335,"prefix":"1.0.0.0/24","maxLength":24,"ta":"apnic","expires":1789481874}]}"#;
+        let parsed: RoutinatorResponse = serde_json::from_str(cloudflare).expect("numeric asn");
+        assert_eq!(parsed.roas[0].asn.to_u32().unwrap(), 13335);
+        assert_eq!(parsed.roas[0].max_length, 24);
+
+        let routinator = r#"{"roas":[{"asn":"AS13335","prefix":"1.0.0.0/24","maxLength":24}]}"#;
+        let parsed: RoutinatorResponse = serde_json::from_str(routinator).expect("string asn");
+        assert_eq!(parsed.roas[0].asn.to_u32().unwrap(), 13335);
+
+        let plain = r#"{"roas":[{"asn":"13335","prefix":"1.0.0.0/24","maxLength":24}]}"#;
+        let parsed: RoutinatorResponse =
+            serde_json::from_str(plain).expect("unprefixed string asn");
+        assert_eq!(parsed.roas[0].asn.to_u32().unwrap(), 13335);
+    }
+
+    #[test]
+    fn test_vrp_endpoint_url() {
+        // Self-hosted Routinator: base address, dump lives under /json
+        assert_eq!(
+            vrp_endpoint_url("http://routinator:8323"),
+            "http://routinator:8323/json"
+        );
+        assert_eq!(
+            vrp_endpoint_url("http://routinator:8323/"),
+            "http://routinator:8323/json"
+        );
+        // Public feed: full URL, must be used verbatim
+        assert_eq!(
+            vrp_endpoint_url("https://rpki.cloudflare.com/rpki.json"),
+            "https://rpki.cloudflare.com/rpki.json"
+        );
+    }
 
     #[test]
     fn test_parse_asn() {

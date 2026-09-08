@@ -43,7 +43,18 @@ flush_interval_secs = 1
 
 [rpki]
 enabled = true
+# Entweder die Basis-Adresse eines selbst gehosteten Validators (Dump unter
+# /json), oder die volle URL eines oeffentlichen VRP-Feeds, die auf .json
+# endet und dann unverändert verwendet wird.
+#
+# Ohne eigenen Server testbar mit dem oeffentlichen rpki-client-Feed:
+#   routinator_url        = "https://rpki.cloudflare.com/rpki.json"
+#   refresh_interval_secs = 3600
+# Das ist ein ~100 MB Download pro Abruf von einem fremden Dienst — nicht
+# haeufiger als stuendlich abfragen. Fuer den Dauerbetrieb einen eigenen
+# Validator hosten.
 routinator_url = "http://routinator:8323"
+refresh_interval_secs = 600
 
 [tls]
 enabled = false

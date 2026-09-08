@@ -145,7 +145,19 @@ impl Default for ClickHouseConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct RpkiConfig {
     pub enabled: bool,
+    /// Either a self-hosted validator's base address
+    /// (`http://routinator:8323`, dump served under `/json`) or the full URL
+    /// of a public VRP feed ending in `.json`, which is then used verbatim.
     pub routinator_url: String,
+    /// How often the VRP table is refetched. A self-hosted validator can be
+    /// polled aggressively; a public feed is a ~100 MB download per fetch and
+    /// belongs to someone else, so poll it sparingly (3600 s or more).
+    #[serde(default = "default_rpki_refresh_secs")]
+    pub refresh_interval_secs: u64,
+}
+
+fn default_rpki_refresh_secs() -> u64 {
+    600
 }
 
 impl Default for RpkiConfig {
@@ -153,6 +165,7 @@ impl Default for RpkiConfig {
         Self {
             enabled: false,
             routinator_url: "http://routinator:8323".to_string(),
+            refresh_interval_secs: default_rpki_refresh_secs(),
         }
     }
 }
