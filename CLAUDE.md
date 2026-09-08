@@ -158,6 +158,38 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
   1000 Events nie gematcht hat — gegen genau die stille Fehlfunktion aus Bug 2.
   **338 Tests grün** (+10), clippy und fmt sauber.
 
+- **Update 08.09.2026 (2) — Fokus auf den funktionierenden Teil:** Nach der
+  Bewertung wurde die Wellenphysik-Spur zurückgestellt und der RPKI/IRR-Pfad
+  serverlos lauffähig und messbar gemacht.
+  1. **`rpki_cache` akzeptiert öffentliche VRP-Feeds** — `asn` kommt je nach
+     Publisher als String (`"AS13335"`, Routinator) oder Zahl (`13335`,
+     rpki-client); URLs auf `.json` werden unverändert verwendet;
+     `rpki.refresh_interval_secs` ist konfigurierbar (öffentliche Feeds sind
+     ~104 MB pro Abruf, also ≥ 3600 s). Damit läuft die RPKI-Validierung
+     **ohne eigenen Validator und ohne Server**. Default bleibt Routinator.
+  2. **`tools/rpki_probe`** — misst die reale Alert-Rate gegen den Live-Stream,
+     ohne NATS/ClickHouse. `--prefix` filtert auf die Präfixe eines Kunden.
+  3. **Zustand vs. Ereignis getrennt (`anomaly_detector.rs`)** — zwei Fehler,
+     die erst durch die Messung an echten Daten sichtbar wurden:
+     - `HijackDetector::check()` meldete die **Erstsichtung** eines Präfixes
+       als Hijack. Ohne ClickHouse-Warmup meldet ein Kaltstart damit die
+       gesamte sichtbare Routing-Tabelle. Jetzt: Erstsichtung wird gelernt,
+       plus Lernphase (Default 1 h) für weitere Origins, weil viele Präfixe
+       legitim mehrere Origins haben (Multi-Homing, Anycast).
+     - RPKI-invalide Routen alarmierten bei **jeder** Ankündigung. Gemessen:
+       2404 invalide Ankündigungen/Minute von nur 145 Routen — dieselben
+       veralteten ROAs. Jetzt wird pro (Präfix, Origin) der letzte
+       RPKI-Status gemerkt und nur der **Wechsel** nach invalid gemeldet.
+     Mehrere Tests hatten das alte Verhalten als Sollverhalten festgeschrieben
+     (u. a. `phase4b_test`: 3 Anomalien für 3 einmalig gesehene Präfixe) und
+     wurden auf die tatsächlich gemeinte Situation umgebaut.
+
+  **Wirkung, an 240 s Live-BGP gemessen (2.951.839 Ankündigungen, 409.644
+  Präfixe gelernt):** 0 Alerts in der Lernphase, danach 19,3 Alerts/Minute
+  global — gegenüber ~410.000 Kaltstart-Meldungen plus 2404/Minute vorher.
+  Durchsatz dabei ~12.300 Ankündigungen/s single-threaded inkl.
+  RPKI-Validierung. **344 Tests grün**, clippy und fmt sauber.
+
 ---
 
 ## Projektübersicht
