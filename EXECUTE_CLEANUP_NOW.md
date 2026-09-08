@@ -1,5 +1,11 @@
 # 🚀 EXECUTE CLEANUP NOW - Step by Step
 
+> **⚠️ VERALTET (Stand 08.09.2026).** Dieses Dokument beschreibt Arbeiten an
+> einem Server, der stillgelegt wurde und nicht mehr existiert
+> (167.235.30.106). Die beschriebenen Schritte nicht mehr ausführen. Das
+> Dokument bleibt als Protokoll erhalten; den aktuellen Stand beschreibt
+> `CLAUDE.md`.
+
 **Target**: Free disk space from 100% to ~80% (15-20GB available)
 **Server**: root@167.235.30.106
 **Time**: ~5-10 minutes

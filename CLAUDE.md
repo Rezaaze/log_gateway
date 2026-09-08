@@ -1,10 +1,45 @@
-# Log Gateway — Claude Session Context
+# Log Gateway / BGP TrustWave — Claude Session Context
 
-Dieses Dokument beschreibt das Projekt vollständig, damit Claude in einer neuen Session sofort orientiert ist.
+## Wo das Projekt steht (Stand 08.09.2026)
+
+**Zwei Teile in einem Repo:**
+
+| Teil | Umfang | Zustand |
+|---|---|---|
+| BGP-Monitoring (RPKI/IRR/Hijack-Erkennung) | ~11.200 Zeilen | funktioniert, live gegen echte Daten geprüft |
+| Log-Gateway (HTTP-Ingest, PII, Cache, S3) | ~4.800 Zeilen | funktioniert, live geprüft, aber nicht mehr Schwerpunkt |
+| gemeinsam (lib, main, config, metrics) | ~2.500 Zeilen | — |
+
+**345 Tests grün** (1 Fehlschlag ist ein Sandbox-Artefakt: der Test erwartet
+einen Permission-Fehler beim Schreiben nach `/root`, läuft dort aber als root).
+`cargo clippy --workspace --all-targets` und `cargo fmt --check` sauber.
+
+**Wichtig für jede neue Session:**
+
+1. **Es gibt keine Produktionsumgebung mehr.** Der Hetzner-Server
+   (167.235.30.106) ist stillgelegt. Der Deploy-Job in `.github/workflows/ci.yml`
+   ist mit `if: false` deaktiviert. Alle Abschnitte weiter unten, die SSH-Zugriff
+   oder laufende Container beschreiben, sind historisch.
+2. **Die Wellenphysik-Hypothese trägt nicht.** Sie wurde an echten RIPE-Daten
+   gemessen und widerlegt — Details und Zahlen in **`PROJEKT_BEWERTUNG.md`**.
+   Phase 4–7 der `TRUSTWAVE_ROADMAP.md` bauen darauf auf und sollten nicht
+   ohne erneute Prüfung begonnen werden.
+3. **Serverlos testbar.** Der RPKI-Pfad läuft mit einem öffentlichen VRP-Feed
+   ohne eigenen Validator: `tools/rpki_probe` (Alert-Rate messen) und
+   `tools/asn_report` (RPKI-Statusbericht für ein beliebiges AS).
+4. **`-C target-cpu=native` ist opt-in.** Es steht auskommentiert in
+   `.cargo/config.toml`; aktiviert stürzte der Build in virtualisierten
+   Umgebungen mit SIGILL ab. Die Benchmark-Zahlen im README stammen aus der
+   Zeit davor und sind nicht mehr gültig.
+
+**Maßgebliche Dokumente:** `PROJEKT_BEWERTUNG.md` (Bewertung + Messungen),
+`TRUSTWAVE_ROADMAP.md` (Phasen 0–3 aktuell, 4–7 fraglich),
+`PRODUCT_ROADMAP.md` (Produktsicht). `DEV_ROADMAP.md` ist ein verworfener
+Alternativentwurf — nicht verwenden.
 
 ---
 
-## ⚠️ Stand 31.08.2026 — dieses Dokument ist ein historischer Snapshot
+## ⚠️ Ab hier: historischer Snapshot vom 31.08.2026
 
 Alles unten beschreibt den Zustand des reinen "Log Gateway" (105/105 Tests,
 Milestones M1–M16, P1–P6). **Seit 08.03.2026 ist das Projekt zu "BGP
@@ -194,10 +229,10 @@ Alternativentwurf (siehe Hinweis am Dateianfang) — nicht verwenden.
 
 ## Projektübersicht
 
-**Zweck:** Production-grade Rust Log Processing Gateway als Ersatz für ineffiziente Python Log-Infrastruktur.
+**Zweck (historisch):** Production-grade Rust Log Processing Gateway als Ersatz für ineffiziente Python Log-Infrastruktur. Inzwischen der kleinere von zwei Teilen — siehe Kopf dieses Dokuments.
 **Stack:** Rust 2021 · Tokio async · Axum 0.7 · Prometheus · Grafana · MinIO/S3
-**Pfad:** `/Users/alirezashahsavarkhani/rust_tool/log-gateway`
-**Status:** Alle Milestones + Tasks + P1–P6 abgeschlossen + Performance-Optimierungen #1, #2 & #3 + Hardcore Tests + 4-Zylinder Cluster. **105/105 Tests grün.**
+**Pfad:** lokal je nach Arbeitsplatz; in Remote-Sessions `/home/user/log_gateway`
+**Status (historisch):** Alle Milestones + Tasks + P1–P6 abgeschlossen + Performance-Optimierungen #1, #2 & #3 + Hardcore Tests + 4-Zylinder Cluster. Die damals genannten 105 Tests sind heute 345 (gesamtes Repo).
 Python-Streams vollständig durch Rust ersetzt. bgp-stream deployed, Verbindungsfix (rustls ALPN) gepusht — **Verifikation ausstehend (neue Session).**
 
 ---
@@ -584,7 +619,7 @@ debug = true           # Volle Debug-Informationen
 - `gateway_1..4` — je auf CPU 0-3 gepinnt via `cpuset`, nur intern erreichbar
 - `prometheus` scrapt alle 4 Instanzen via `deploy/prometheus.prod.yml`
 
-**Produktions-Deploy (Hetzner 167.235.30.106):**
+**Produktions-Deploy (Hetzner 167.235.30.106) — ⚠️ STILLGELEGT, existiert nicht mehr:**
 - Projektpfad: `/root/log-gateway-src`
 - GitHub Actions deployed automatisch auf Push zu `main` (multi-arch amd64+arm64)
 - Secrets: `/root/log-gateway-src/secrets/*.txt`
@@ -605,10 +640,15 @@ Rust-Ersatz für die Python BGP-Stream-Implementierung.
 - Letzter Fix (Commit `19428f7`): expliziter `rustls::ClientConfig` ohne ALPN als `Connector::Rustls` — verhindert CLOSE-WAIT-Hänger durch falsche ALPN-Aushandlung
 - `connect_async_tls_with_config(..., None)` NICHT verwenden — baut internen Connector ohne CryptoProvider → panic/hang
 
-**Neue Session: Als erstes prüfen:**
+**⚠️ Der folgende Prüfschritt ist hinfällig** — der Server ist stillgelegt.
+Nicht versuchen, sondern für einen lokalen Funktionsnachweis stattdessen:
+
 ```bash
-ssh root@167.235.30.106 "docker ps | grep bgp && docker logs bgp-stream --tail 30"
-# Erwartetes Ergebnis: "Connected ✓" + nach 10s Stats-Zeile
+# BGP-Erkennung ohne jede Infrastruktur, gegen den echten Live-Stream:
+cargo run --release -p rpki-probe -- --seconds 120
+
+# RPKI-Statusbericht für ein beliebiges AS:
+cargo run --release -p asn-report -- AS3320
 ```
 
 ## Alert Rules (deploy/alertmanager/alerts.yml)

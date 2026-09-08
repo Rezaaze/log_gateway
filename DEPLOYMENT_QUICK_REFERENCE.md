@@ -1,5 +1,11 @@
 # 🚀 Deployment Quick Reference
 
+> **⚠️ VERALTET (Stand 08.09.2026).** Dieses Dokument beschreibt Arbeiten an
+> einem Server, der stillgelegt wurde und nicht mehr existiert
+> (167.235.30.106). Die beschriebenen Schritte nicht mehr ausführen. Das
+> Dokument bleibt als Protokoll erhalten; den aktuellen Stand beschreibt
+> `CLAUDE.md`.
+
 **NATS Streaming Migration - Ready for Deployment**
 
 ---

@@ -1,5 +1,11 @@
 # 🔧 Disk Cleanup Guide - Free Up Space for Migration
 
+> **⚠️ VERALTET (Stand 08.09.2026).** Dieses Dokument beschreibt Arbeiten an
+> einem Server, der stillgelegt wurde und nicht mehr existiert
+> (167.235.30.106). Die beschriebenen Schritte nicht mehr ausführen. Das
+> Dokument bleibt als Protokoll erhalten; den aktuellen Stand beschreibt
+> `CLAUDE.md`.
+
 **Current Status**: Disk 100% full (75GB/75GB) - CRITICAL ⚠️
 **Requirement**: Need > 20GB free before Phase 0 migration
 

@@ -34,7 +34,16 @@ A production-grade, high-performance Rust log processing gateway — built as a 
 | 3 | zstd Level 1 (was 3) | −40% compress CPU |
 | 3 | Tokio worker-count startup log | production observability |
 
-## Benchmark Results (Hetzner ARM64, release build)
+## Benchmark Results (historisch — nicht reproduziert)
+
+> **Diese Zahlen sind eine Momentaufnahme und heute nicht mehr gültig.**
+> Gemessen auf einem Hetzner-ARM64-Server, der nicht mehr existiert, und mit
+> `-C target-cpu=native` in `.cargo/config.toml`. Dieses Flag ist seit dem
+> 08.09.2026 opt-in (es ließ den Build in virtualisierten Umgebungen mit
+> SIGILL abstürzen), ein Standard-Build ist also ohne die damaligen
+> CPU-Optimierungen. Um wie viel langsamer, wurde nicht nachgemessen.
+> Für eigene Zahlen: `RUSTFLAGS="-C target-cpu=native" cargo build --release`
+> auf der Zielmaschine und neu messen.
 
 | Scenario | Req/s | p50 | p95 | p99 |
 |---|---|---|---|---|
