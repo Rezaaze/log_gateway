@@ -11,8 +11,15 @@ use tokio::sync::mpsc;
 async fn test_detector_runner_integration() {
     println!("=== Testing Phase 4b Implementation ===");
 
-    // Create a DetectorRunner
-    let detector_runner = Arc::new(DetectorRunner::new());
+    // Zero learning period so the run below can establish a prefix's normal
+    // origin with one announcement and have the next, different origin count
+    // as an event straight away. In production the learning period gives the
+    // detector time to collect a prefix's legitimate origins first.
+    let hijack_detector = Arc::new(
+        log_gateway::anomaly_detector::HijackDetector::new()
+            .with_learning_period(chrono::Duration::zero()),
+    );
+    let detector_runner = Arc::new(DetectorRunner::new().with_hijack_detector(hijack_detector));
 
     // Create a test channel
     let (tx, rx) = mpsc::channel::<BgpRecord>(10);
@@ -90,6 +97,25 @@ async fn test_detector_runner_integration() {
     tx.send(record4).await.unwrap();
     println!("  - Sent withdrawal");
 
+    // Test 5: The actual hijack signature — a prefix whose normal origin the
+    // runner has already observed (record3, AS65003) is now announced by a
+    // different AS. Records 1–4 each concerned a prefix the runner had never
+    // seen; those establish state and must stay silent, which is why this
+    // fifth record is what the anomaly count below refers to.
+    let record5 = BgpRecord {
+        timestamp: Utc::now(),
+        event_type: "announce".to_string(),
+        prefix: "10.0.0.0/8".to_string(),
+        origin_as: 65099,
+        as_path: vec![65099],
+        peer_asn: 65000,
+        collector: "unknown".to_string(),
+        peer_ip: "".to_string(),
+    };
+
+    tx.send(record5).await.unwrap();
+    println!("  - Sent new origin for an already-observed prefix");
+
     // Drop the sender to signal completion
     drop(tx);
 
@@ -104,8 +130,13 @@ async fn test_detector_runner_integration() {
     println!("Errors: {}", stats.errors);
 
     // Verify the stats
-    assert_eq!(stats.events_processed, 4);
-    assert_eq!(stats.anomalies_detected, 3); // Detects hijack + flapping + additional anomaly
+    assert_eq!(stats.events_processed, 5);
+    // Exactly one anomaly: record5's new origin for a prefix whose normal
+    // origin was already observed. This assertion used to read 3 — one for
+    // each announced prefix — which encoded the cold-start bug: every prefix
+    // seen for the first time was reported as a hijack, so a restart flagged
+    // the whole visible routing table.
+    assert_eq!(stats.anomalies_detected, 1);
     assert_eq!(stats.errors, 0);
 
     // Get metrics

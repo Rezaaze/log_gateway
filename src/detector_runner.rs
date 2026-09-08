@@ -689,7 +689,14 @@ mod tests {
     async fn test_detector_runner_hijack_detection() {
         use chrono::Utc;
 
-        let runner = DetectorRunner::new();
+        // Zero learning period: this test establishes the prefix's normal
+        // origin with the first announcement and expects the second, different
+        // origin to be an event immediately. In production the learning period
+        // gives the detector time to collect a prefix's legitimate origins
+        // before judging.
+        let hijack_detector =
+            Arc::new(HijackDetector::new().with_learning_period(chrono::Duration::zero()));
+        let runner = DetectorRunner::new().with_hijack_detector(hijack_detector);
 
         // First announce: ASN 65001 for prefix 10.0.0.0/8
         let record1 = crate::clickhouse_exporter::BgpClickHouseRecord {
@@ -824,10 +831,16 @@ mod tests {
         rpki_cache.set_test_data(index).await;
 
         // Create DetectorRunner with RPKI cache
+        // The prefix is known and normally originated by the AS in the ROA.
+        // That is what makes the announcement below a hijack rather than
+        // the detector's first-ever sighting of an unknown prefix.
+        let hijack_detector = Arc::new(HijackDetector::new());
+        hijack_detector.seed_known_prefix("192.0.2.0/24", &[11111]);
         let runner = DetectorRunner::with_enrichment(
             rpki_cache,
             Arc::new(crate::irr_cache::IrrCache::new()),
-        );
+        )
+        .with_hijack_detector(hijack_detector);
 
         // Process announcement with wrong ASN (99999) → InvalidAsn
         let record = make_bgp_record("192.0.2.0/24", 99999, "announce");
@@ -858,11 +871,20 @@ mod tests {
         let index = HashMap::from([(key, vec![(24, 64512)])]);
         rpki_cache.set_test_data(index).await;
 
-        // Create DetectorRunner with RPKI cache
+        // Here the announcing AS is the one in the ROA — only the prefix
+        // length violates it. So this is not a new-origin event but an RPKI
+        // status change: the route was fine when last seen and is now a
+        // maxLength violation. Without a previous status there is nothing to
+        // change from, and a permanently over-specific route would otherwise
+        // re-alert on every single announcement.
+        let hijack_detector = Arc::new(HijackDetector::new());
+        hijack_detector.seed_known_prefix("192.0.2.0/28", &[64512]);
+        hijack_detector.seed_rpki_status("192.0.2.0/28", 64512, RpkiStatus::NotFound);
         let runner = DetectorRunner::with_enrichment(
             rpki_cache,
             Arc::new(crate::irr_cache::IrrCache::new()),
-        );
+        )
+        .with_hijack_detector(hijack_detector);
 
         // Process announcement with longer prefix (192.0.2.0/28) → InvalidLength
         let record = make_bgp_record("192.0.2.0/28", 64512, "announce");
@@ -962,7 +984,16 @@ mod tests {
             Arc::new(GatewayMetrics::new()),
         ));
 
-        let runner = DetectorRunner::new().with_escalation(Arc::clone(&router));
+        // Zero learning period: this test establishes the prefix's normal
+        // origin with the first announcement and expects the second, different
+        // origin to be an event immediately. In production the learning period
+        // gives the detector time to collect a prefix's legitimate origins
+        // before judging.
+        let hijack_detector =
+            Arc::new(HijackDetector::new().with_learning_period(chrono::Duration::zero()));
+        let runner = DetectorRunner::new()
+            .with_escalation(Arc::clone(&router))
+            .with_hijack_detector(hijack_detector);
 
         // First announce: establishes origin AS 65001 for the prefix.
         let record1 = make_bgp_record("10.0.0.0/8", 65001, "announce");
@@ -1095,10 +1126,11 @@ mod tests {
         };
         let warmup_anomaly = shared_detector.check(&warmup_record);
         assert!(
-            warmup_anomaly.is_some(),
-            "sanity check: a brand-new detector's first-ever sighting of a prefix flags — this \
-             is the known, expected cold-start behavior that warmup()/sharing is meant to absorb \
-             exactly once, not repeatedly per detector instance"
+            warmup_anomaly.is_none(),
+            "a detector's first-ever sighting of a prefix must not flag: it has learned \
+             nothing about that prefix yet, so 'this origin is unknown' says only that the \
+             process started recently. This used to flag, which meant a cold start reported \
+             the entire visible routing table as hijacked."
         );
 
         // Attach this pre-warmed, shared instance to a DetectorRunner —

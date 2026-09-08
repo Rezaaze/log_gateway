@@ -55,19 +55,61 @@ pub trait Detector: Send + Sync {
     fn check(&self, event: &BgpClickHouseRecord) -> Option<Anomaly>;
 }
 
-/// Detects possible BGP hijacks by tracking which ASNs announce each prefix.
-#[derive(Debug, Default)]
+/// What the detector has learned about one prefix.
+#[derive(Debug)]
+struct PrefixState {
+    /// Origin ASNs observed announcing this prefix.
+    known_asns: HashSet<u32>,
+    /// When this prefix was first observed. A prefix seen for the first time
+    /// carries no information about what is normal for it — see
+    /// `HijackDetector::check`.
+    first_seen: DateTime<Utc>,
+}
+
+/// Detects possible BGP hijacks by tracking which ASNs announce each prefix,
+/// and by telling a change in RPKI status apart from a persistent state.
+#[derive(Debug)]
 pub struct HijackDetector {
-    /// Maps prefix → set of known origin ASNs.
-    prefix_to_asns: DashMap<String, HashSet<u32>>,
+    /// Maps prefix → what has been learned about it.
+    prefix_state: DashMap<String, PrefixState>,
+    /// Maps (prefix, origin_as) → the RPKI status last observed for that route.
+    /// Lets the detector tell a *change* ("was valid until 14:03") from a
+    /// *state* ("has been invalid for months") — only the change is an event.
+    rpki_state: DashMap<(String, u32), RpkiStatus>,
+    /// How long a prefix must have been observed before a new origin for it
+    /// counts as an event. Inside this window the detector is still learning
+    /// which origins are normal — many prefixes are legitimately announced by
+    /// several ASes (multi-homing, anycast), and those would all look like
+    /// hijacks on the second sighting.
+    learning_period: chrono::Duration,
+}
+
+impl Default for HijackDetector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HijackDetector {
     /// Creates a new hijack detector with empty state.
     pub fn new() -> Self {
         Self {
-            prefix_to_asns: DashMap::new(),
+            prefix_state: DashMap::new(),
+            rpki_state: DashMap::new(),
+            learning_period: chrono::Duration::hours(1),
         }
+    }
+
+    /// Overrides how long a prefix is observed before a new origin for it is
+    /// treated as an event (default: 1 hour).
+    pub fn with_learning_period(mut self, period: chrono::Duration) -> Self {
+        self.learning_period = period;
+        self
+    }
+
+    /// Number of prefixes the detector currently knows about.
+    pub fn known_prefix_count(&self) -> usize {
+        self.prefix_state.len()
     }
 
     /// Warms up the detector with historical data from ClickHouse.
@@ -92,11 +134,20 @@ impl HijackDetector {
             Ok(rows) => {
                 for row in rows {
                     let set: HashSet<u32> = row.known_as.into_iter().collect();
-                    self.prefix_to_asns.insert(row.prefix, set);
+                    // Warmed-up prefixes are known history, not fresh
+                    // observations: backdate them past the learning period so
+                    // a new origin for them is an event immediately.
+                    self.prefix_state.insert(
+                        row.prefix,
+                        PrefixState {
+                            known_asns: set,
+                            first_seen: Utc::now() - self.learning_period,
+                        },
+                    );
                 }
                 tracing::info!(
                     "HijackDetector warmup complete: loaded {} prefixes",
-                    self.prefix_to_asns.len()
+                    self.prefix_state.len()
                 );
             }
             Err(e) => {
@@ -104,6 +155,27 @@ impl HijackDetector {
                 // Do NOT panic, do NOT fail startup.
             }
         }
+    }
+
+    /// Test helper: seeds a prefix as already learned — known origins, first
+    /// seen long enough ago that the learning period has elapsed. Mirrors what
+    /// `warmup()` produces from historical data.
+    #[cfg(test)]
+    pub(crate) fn seed_known_prefix(&self, prefix: &str, asns: &[u32]) {
+        self.prefix_state.insert(
+            prefix.to_string(),
+            PrefixState {
+                known_asns: asns.iter().copied().collect(),
+                first_seen: Utc::now() - self.learning_period - chrono::Duration::seconds(1),
+            },
+        );
+    }
+
+    /// Test helper: seeds the last-seen RPKI status for one route.
+    #[cfg(test)]
+    pub(crate) fn seed_rpki_status(&self, prefix: &str, origin_as: u32, status: RpkiStatus) {
+        self.rpki_state
+            .insert((prefix.to_string(), origin_as), status);
     }
 
     /// Checks a BGP event for hijacks with pre-fetched RPKI and IRR status.
@@ -128,8 +200,31 @@ impl HijackDetector {
         // Helper: check if IRR signals inconsistency
         let irr_inconsistent = matches!(irr_status, IrrStatus::Inconsistent { .. });
 
+        // Record this route's RPKI status and remember what it was before.
+        // Measured on the live stream: RPKI-invalid announcements are dominated
+        // by a small set of routes that are invalid *continuously* — 2404
+        // invalid announcements per minute came from only 145 distinct routes.
+        // Those are stale ROAs and misconfigurations, not incidents; alerting
+        // on each announcement reports a standing condition over and over. What
+        // carries information is the transition into that state.
+        let is_invalid = matches!(
+            rpki_status,
+            RpkiStatus::InvalidAsn | RpkiStatus::InvalidLength
+        );
+        let previous_status = self
+            .rpki_state
+            .insert((event.prefix.clone(), event.origin_as), rpki_status.clone());
+        let was_invalid = matches!(
+            previous_status,
+            Some(RpkiStatus::InvalidAsn) | Some(RpkiStatus::InvalidLength)
+        );
+        let newly_invalid = is_invalid && previous_status.is_some() && !was_invalid;
+
         match (anomaly.take(), rpki_status) {
-            // Case 1: No anomaly from check() (known AS) but RPKI invalid → Warning
+            // Case 1: No anomaly from check() (known AS) but RPKI invalid.
+            // Only a *change* into invalid is reported; a route that was
+            // already invalid last time we saw it is a known condition.
+            (None, RpkiStatus::InvalidAsn | RpkiStatus::InvalidLength) if !newly_invalid => None,
             (None, RpkiStatus::InvalidAsn | RpkiStatus::InvalidLength) => {
                 // Known AS but RPKI invalid → adjust confidence based on IRR
                 let (confidence, irr_note) = if irr_inconsistent {
@@ -145,8 +240,11 @@ impl HijackDetector {
                     confidence,
                     detected_at: Utc::now(),
                     details: format!(
-                        "RPKI INVALID: AS{} announced {} — ROA violation (known AS, possible misconfiguration){}",
-                        event.origin_as, event.prefix, irr_note
+                        "RPKI status changed to INVALID: AS{} announced {} — was {:?} when last seen, now a ROA violation (known AS){}",
+                        event.origin_as,
+                        event.prefix,
+                        previous_status.unwrap_or(RpkiStatus::Unavailable),
+                        irr_note
                     ),
                     tenant_id: event.tenant_id.clone(),
                 })
@@ -201,20 +299,44 @@ impl Detector for HijackDetector {
         let prefix = &event.prefix;
         let origin_as = event.origin_as;
 
-        // Get or insert the set of known ASNs for this prefix.
-        let entry = self.prefix_to_asns.entry(prefix.clone());
-        let mut asn_set = entry.or_insert_with(HashSet::new);
+        // First observation of this prefix: record it and stay silent. The
+        // detector knows nothing about what is normal for a prefix it has
+        // never seen, so calling it a hijack says nothing about the route —
+        // only that the process started recently. Without this, a cold start
+        // flags essentially the whole visible routing table (~1M prefixes).
+        let Some(mut state) = self.prefix_state.get_mut(prefix) else {
+            self.prefix_state.insert(
+                prefix.clone(),
+                PrefixState {
+                    known_asns: HashSet::from([origin_as]),
+                    first_seen: Utc::now(),
+                },
+            );
+            return None;
+        };
 
         // If this ASN is already known, it's legitimate.
-        if asn_set.contains(&origin_as) {
+        if state.known_asns.contains(&origin_as) {
             return None;
         }
 
-        // New ASN for this prefix → possible hijack.
-        asn_set.insert(origin_as);
+        // New origin for a known prefix. Inside the learning period the set of
+        // legitimate origins is still being collected — a multi-homed prefix
+        // announced by a second, entirely legitimate AS would otherwise fire
+        // here. Record it and stay silent.
+        let observed_for = Utc::now() - state.first_seen;
+        state.known_asns.insert(origin_as);
+        if observed_for < self.learning_period {
+            return None;
+        }
 
-        // Format details string.
-        let known_asns: Vec<u32> = asn_set.iter().copied().collect();
+        // New origin for a prefix whose normal origins are known → event.
+        let known_asns: Vec<u32> = state
+            .known_asns
+            .iter()
+            .copied()
+            .filter(|asn| *asn != origin_as)
+            .collect();
         let details = format!(
             "AS{} announced {} but known originators are: {:?}",
             origin_as, prefix, known_asns
@@ -655,18 +777,123 @@ mod tests {
         }
     }
 
+    // --- Zustand vs. Ereignis -------------------------------------------
+
+    /// A prefix the detector has never seen carries no information about what
+    /// is normal for it. Flagging the first sighting reports the age of the
+    /// process, not a property of the route — and on a cold start that is the
+    /// entire visible routing table.
+    #[test]
+    fn test_first_sighting_of_prefix_is_learning_not_an_event() {
+        let detector = HijackDetector::new();
+        let event = make_event("203.0.113.0/24", 64512, "announce");
+
+        assert!(
+            detector.check(&event).is_none(),
+            "first sighting must be silent"
+        );
+        assert_eq!(detector.known_prefix_count(), 1, "but it must be recorded");
+
+        // The same origin again is still normal.
+        assert!(detector.check(&event).is_none());
+    }
+
+    /// Many prefixes are legitimately announced by more than one AS
+    /// (multi-homing, anycast). Inside the learning period the detector is
+    /// still collecting that set and must not treat the second origin as an
+    /// attack.
+    #[test]
+    fn test_new_origin_within_learning_period_is_silent() {
+        let detector = HijackDetector::new().with_learning_period(chrono::Duration::hours(1));
+        assert!(detector
+            .check(&make_event("203.0.113.0/24", 64512, "announce"))
+            .is_none());
+
+        let second_origin = make_event("203.0.113.0/24", 64513, "announce");
+        assert!(
+            detector.check(&second_origin).is_none(),
+            "a second origin seen moments after the first is not yet an event"
+        );
+    }
+
+    /// Once a prefix has been observed long enough, a previously unseen origin
+    /// for it is the classic hijack signature.
+    #[test]
+    fn test_new_origin_after_learning_period_is_an_event() {
+        let detector = HijackDetector::new().with_learning_period(chrono::Duration::zero());
+        assert!(detector
+            .check(&make_event("203.0.113.0/24", 64512, "announce"))
+            .is_none());
+
+        let anomaly = detector.check(&make_event("203.0.113.0/24", 64513, "announce"));
+        let anomaly = anomaly.expect("new origin for a learned prefix is an event");
+        assert_eq!(anomaly.origin_as, 64513);
+        assert!(
+            anomaly.details.contains("64512"),
+            "details must name the known originator, not the announcing AS: {}",
+            anomaly.details
+        );
+        assert!(
+            !anomaly.details.contains("[64513]"),
+            "the flagged AS must not be listed as a known originator: {}",
+            anomaly.details
+        );
+    }
+
+    /// Measured on the live stream: 2404 RPKI-invalid announcements per minute
+    /// came from just 145 distinct routes — the same stale ROAs announcing over
+    /// and over. Reporting each announcement restates a standing condition; the
+    /// information is in the transition into it.
+    #[test]
+    fn test_rpki_invalid_alerts_on_transition_not_on_state() {
+        let detector = HijackDetector::new();
+        detector.seed_known_prefix("203.0.113.0/24", &[64512]);
+        let event = make_event("203.0.113.0/24", 64512, "announce");
+        let irr = IrrStatus::Consistent;
+
+        // First time this route's status is seen at all — nothing to compare to.
+        assert!(
+            detector
+                .check_with_rpki_status(&event, RpkiStatus::InvalidAsn, &irr)
+                .is_none(),
+            "the first observation establishes state, it is not a change"
+        );
+
+        // Still invalid on the next announcement: a known condition, not news.
+        assert!(
+            detector
+                .check_with_rpki_status(&event, RpkiStatus::InvalidAsn, &irr)
+                .is_none(),
+            "a chronically invalid route must not re-alert on every announcement"
+        );
+
+        // The route becomes valid again — recorded, no alert.
+        assert!(detector
+            .check_with_rpki_status(&event, RpkiStatus::Valid, &irr)
+            .is_none());
+
+        // And now it turns invalid. That is the event.
+        let anomaly = detector
+            .check_with_rpki_status(&event, RpkiStatus::InvalidAsn, &irr)
+            .expect("valid -> invalid is an event");
+        assert_eq!(anomaly.confidence, 0.60);
+        assert!(
+            anomaly.details.contains("changed to INVALID"),
+            "details must say what changed: {}",
+            anomaly.details
+        );
+    }
+
     // Test 1: Bekanntes AS + RPKI invalid + IRR inconsistent → confidence 0.75
     #[test]
     fn test_check_rpki_invalid_irr_inconsistent_known_as() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
 
-        // Simulate known AS by adding it to the detector's state
-        detector
-            .prefix_to_asns
-            .entry("1.2.3.0/24".to_string())
-            .or_insert_with(HashSet::new)
-            .insert(64512);
+        // Known AS, and the route was RPKI-valid when last seen — so this
+        // announcement is a transition into invalid, which is the event.
+        detector.seed_known_prefix("1.2.3.0/24", &[64512]);
+        detector.seed_rpki_status("1.2.3.0/24", 64512, RpkiStatus::Valid);
 
         let rpki_status = RpkiStatus::InvalidAsn;
         let irr_status = IrrStatus::Inconsistent {
@@ -685,6 +912,10 @@ mod tests {
     fn test_check_rpki_invalid_irr_inconsistent_new_as() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
+        // "New AS" means: the prefix is known and normally announced by
+        // someone else. On a prefix the detector has never seen, AS64512 is
+        // not new — it is the first thing known about that prefix.
+        detector.seed_known_prefix("1.2.3.0/24", &[64500]);
 
         let rpki_status = RpkiStatus::InvalidAsn;
         let irr_status = IrrStatus::Inconsistent {
@@ -703,6 +934,7 @@ mod tests {
     fn test_check_rpki_notfound_irr_inconsistent() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
+        detector.seed_known_prefix("1.2.3.0/24", &[64500]);
 
         let rpki_status = RpkiStatus::NotFound;
         let irr_status = IrrStatus::Inconsistent {
@@ -721,6 +953,7 @@ mod tests {
     fn test_check_rpki_notfound_irr_consistent_no_boost() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
+        detector.seed_known_prefix("1.2.3.0/24", &[64500]);
 
         let rpki_status = RpkiStatus::NotFound;
         let irr_status = IrrStatus::Consistent;
@@ -738,12 +971,9 @@ mod tests {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
 
-        // Simulate known AS by adding it to the detector's state
-        detector
-            .prefix_to_asns
-            .entry("1.2.3.0/24".to_string())
-            .or_insert_with(HashSet::new)
-            .insert(64512);
+        // Known AS, previously valid → transition into invalid
+        detector.seed_known_prefix("1.2.3.0/24", &[64512]);
+        detector.seed_rpki_status("1.2.3.0/24", 64512, RpkiStatus::Valid);
 
         let rpki_status = RpkiStatus::InvalidAsn;
         let irr_status = IrrStatus::Consistent;
@@ -760,6 +990,7 @@ mod tests {
     fn test_check_rpki_valid_irr_inconsistent_new_as() {
         let detector = HijackDetector::new();
         let event = make_event("1.2.3.0/24", 64512, "announce");
+        detector.seed_known_prefix("1.2.3.0/24", &[64500]);
 
         let rpki_status = RpkiStatus::Valid;
         let irr_status = IrrStatus::Inconsistent {
@@ -1032,6 +1263,12 @@ mod tests {
 
         // Create a BGP event with normal AS-path length
         let mut event = make_event("10.0.0.0/8", 64512, "announce");
+        // The prefix must be known with a different origin — that is what
+        // makes AS64512 "new" for it. On a never-seen prefix the detector is
+        // still learning and correctly stays silent.
+        detector
+            .hijack_detector()
+            .seed_known_prefix("10.0.0.0/8", &[64513]);
 
         // First few events with normal AS-path length (2-3 hops)
         for i in 0..10 {
@@ -1065,6 +1302,12 @@ mod tests {
 
         // Create a BGP event that will trigger an anomaly
         let event = make_event("10.0.0.0/8", 64512, "announce");
+        // The prefix must be known with a different origin — that is what
+        // makes AS64512 "new" for it. On a never-seen prefix the detector is
+        // still learning and correctly stays silent.
+        detector
+            .hijack_detector()
+            .seed_known_prefix("10.0.0.0/8", &[64513]);
 
         // Check the event
         detector.check(&event);
@@ -1087,6 +1330,12 @@ mod tests {
 
         // Create a BGP event that will trigger an anomaly
         let event = make_event("10.0.0.0/8", 64512, "announce");
+        // The prefix must be known with a different origin — that is what
+        // makes AS64512 "new" for it. On a never-seen prefix the detector is
+        // still learning and correctly stays silent.
+        detector
+            .hijack_detector()
+            .seed_known_prefix("10.0.0.0/8", &[64513]);
 
         // Check the event - should not panic even without metrics
         detector.check(&event);
@@ -1117,6 +1366,12 @@ mod tests {
 
         // Create a BGP event that will trigger an anomaly
         let event = make_event("10.0.0.0/8", 64512, "announce");
+        // The prefix must be known with a different origin — that is what
+        // makes AS64512 "new" for it. On a never-seen prefix the detector is
+        // still learning and correctly stays silent.
+        detector
+            .hijack_detector()
+            .seed_known_prefix("10.0.0.0/8", &[64513]);
 
         // Check the event
         detector.check(&event);
